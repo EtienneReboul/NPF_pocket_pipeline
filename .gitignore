@@ -1,0 +1,44 @@
+config.local.yaml# ── Personal configuration (never commit) ────────────────────────────────────
+# Copy config.local.yaml.example → config.local.yaml and add your email there.
+config.local.yaml
+
+# ── Pipeline runtime outputs ──────────────────────────────────────────────────
+data/sequences/
+data/msa/
+data/interpro/
+data/templates/
+data/boltz_inputs/
+results/
+logs/
+
+# ── Snakemake internals ───────────────────────────────────────────────────────
+.snakemake/
+*.snakemake.log
+
+# ── Conda environments (built automatically by Snakemake) ────────────────────
+.conda/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb

@@ -77,8 +77,8 @@ boltz:
   extra_flags: ""
 
 # ── Stage 5: ChimeraX minimization ───────────────────────────────────────────
-# Full path to ChimeraX — shell aliases are NOT visible to Snakemake subshells
-chimerax_bin: "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX"
+# Full path to ChimeraX should be set in config.local.yaml
+chimerax_bin: "/path/to/ChimeraX"
 
 # ── Stage 6: PLIP ────────────────────────────────────────────────────────────
 plip:

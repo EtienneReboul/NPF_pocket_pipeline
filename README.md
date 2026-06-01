@@ -8,7 +8,7 @@ protein–ligand interactions, and generate ChimeraX visualisation scripts.
 
 ## Pipeline overview
 
-```
+```text
 1. MSA           UniProt → per-protein FASTA + ColabFold MSA (.a3m)
        ↓
 2. InterProScan  EMBL-EBI CDD → binding-site residues per protein (cd174xx)
@@ -44,10 +44,11 @@ Conformations modelled (apo = no ligand, holo = ligand present):
 
 ## Directory layout
 
-```
+```text
 npf_workflow/
 ├── Snakefile
-├── config.yaml                 ← edit this first
+├── config.yaml
+├── config.local.yaml  ← Needs to be created             
 ├── envs/
 │   ├── pipeline.yaml           ← controller env (install once)
 │   ├── boltz2.yaml             ← Boltz-2 compute env
@@ -75,18 +76,17 @@ npf_workflow/
 
 ## Quick start
 
-### 1. Edit config.yaml
+### 1. Create config.local.yaml
 
-Minimum required edits:
+Keep shared defaults in config.yaml and put personal values in config.local.yaml.
+Snakemake loads config.yaml first and then applies config.local.yaml on top of it.
+Create by copy/pasting config.local.yaml and then edit with your real values:
 
 ```yaml
 interproscan:
-  email: "your@email.com"       # required by EMBL-EBI REST API
+       email: "your@email.com"       # your real email, used locally only
 
 chimerax_bin: "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX"
-
-boltz:
-  ligand_smiles: "[O-][N+](=O)[O-]"  # update if not nitrate
 ```
 
 ### 2. Install the controller environment (once)
@@ -121,7 +121,7 @@ snakemake --cores 4 --use-conda
 
 ## Output
 
-```
+```text
 results/
 ├── boltz/
 │   └── {protein}/{conformation}/

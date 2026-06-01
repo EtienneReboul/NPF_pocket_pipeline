@@ -37,8 +37,56 @@ import json
 import re
 from pathlib import Path
 from collections import defaultdict
+import yaml
+
+# ── Configuration loading ─────────────────────────────────────────────────────
+# config.yaml        — tracked by git, contains all defaults (email = placeholder)
+# config.local.yaml  — gitignored, contains your personal overrides (email, paths)
+#
+# To set up your local config:
+#   cp config.local.yaml.example config.local.yaml
+#   # then edit config.local.yaml with your email and ChimeraX path
 
 configfile: "config.yaml"
+
+def deep_update(base, overrides):
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+local_config = Path("config.local.yaml")
+if local_config.exists():
+    with local_config.open() as handle:
+        local_overrides = yaml.safe_load(handle) or {}
+    deep_update(config, local_overrides)
+
+# Validate that the user has replaced the email placeholder
+_email = config.get("interproscan", {}).get("email", "")
+if _email in ("", "your@email.com", "firstname.lastname@institution.fr"):
+    raise ValueError(
+        "\n"
+        "═══════════════════════════════════════════════════════════\n"
+        " Missing personal configuration!\n"
+        "═══════════════════════════════════════════════════════════\n"
+        " The EMBL-EBI InterProScan API requires a valid email.\n"
+        "\n"
+        " Fix (takes 30 seconds):\n"
+        "   open config.local.yaml and set your email and ChimeraX path\n"
+        "═══════════════════════════════════════════════════════════\n"
+    )
+
+if config.get("chimerax_bin", "") in ("", "/path/to/ChimeraX", "CHANGE_ME"):
+    raise ValueError(
+        "\n"
+        "═══════════════════════════════════════════════════════════\n"
+        " Missing ChimeraX path!\n"
+        "═══════════════════════════════════════════════════════════\n"
+        " Set chimerax_bin in config.local.yaml to your local ChimeraX executable.\n"
+        "═══════════════════════════════════════════════════════════\n"
+    )
 
 # ── Directory shortcuts ────────────────────────────────────────────────────────
 DIRS         = config["dirs"]
