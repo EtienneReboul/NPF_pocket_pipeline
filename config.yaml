@@ -1,0 +1,107 @@
+# =============================================================================
+# NPF Family Structure Modelling Pipeline — Master Configuration
+# =============================================================================
+# Covers all stages:
+#   1. MSA         — UniProt → ColabFold MSA per NPF member
+#   2. InterProScan — EMBL-EBI REST → CDD binding-site residues per protein
+#   3. Templates   — RCSB mmCIF download per conformation set
+#   4. Boltz-2     — structure prediction (protein × conformation)
+#   5. Minimize    — ChimeraX energy minimization, CIF → PDB
+#   6. PLIP        — protein-ligand interaction profiling via Docker
+#   7. pliparser   — PLIP report → CSV + ChimeraX .cxc visualisation
+
+# ── Stage 1: UniProt + ColabFold MSA ─────────────────────────────────────────
+uniprot:
+  query: 'reviewed:true AND organism_id:3702 AND protein_name:"NRT1/ PTR FAMILY"'
+  size: 500                        # max sequences to retrieve
+
+colabfold:
+  delay: 8                         # seconds between submissions (rate limit)
+  max_retries: 3
+  poll_interval: 15                # seconds between status polls
+  poll_timeout: 900                # seconds before job times out
+
+# ── Stage 2: InterProScan (EMBL-EBI REST) ────────────────────────────────────
+interproscan:
+  email: "your@email.com"          # required by EBI REST API
+  applications: "CDD"              # run CDD database only
+  poll_interval: 30                # seconds between status polls
+  poll_timeout: 3600               # 1 hour timeout for batch job
+  # CDD subclade accessions for NPF family.
+  # Each protein will be assigned the one cd174xx found in its result.
+  cdd_accessions:
+    - "cd17351"   # MFS_NPF     (root / unclassified)
+    - "cd17413"   # MFS_NPF6
+    - "cd17414"   # MFS_NPF4
+    - "cd17415"   # MFS_NPF3
+    - "cd17416"   # MFS_NPF1_2
+    - "cd17417"   # MFS_NPF5
+    - "cd17418"   # MFS_NPF8
+    - "cd17419"   # MFS_NPF7
+
+# ── Stage 3: Template download ────────────────────────────────────────────────
+templates:
+  efflux: false                    # set true to merge MFS-MDR efflux pump templates
+  # Conformations and their PDB codes.
+  # Folder names containing "holo" → ligand included in Boltz-2 YAML.
+  # Folder names containing "apo"  → protein only.
+  conformations:
+    outward_open_apo:
+      pdb_codes: ["6N3I", "4YBQ", "5C65", "4ZWC", "3O7Q"]
+    occluded_apo:
+      pdb_codes: ["2GFP"]
+    inward_open_apo:
+      pdb_codes: ["4YB9", "4PYP", "5EQI", "5EQH", "5EQG", "4JA4"]
+    occluded_holo:
+      pdb_codes: ["4OH3", "6RW3"]
+    outward_occluded_holo:
+      pdb_codes: ["4GBZ", "4GBY", "4ZWB", "4ZW9"]
+    inward_occluded_holo:
+      pdb_codes: ["4JA3", "2XUT"]
+
+# ── Stage 4: Boltz-2 ─────────────────────────────────────────────────────────
+boltz:
+  # Ligand SMILES — used for all "holo" conformations
+  ligand_smiles: "[O-][N+](=O)[O-]"  # nitrate ion
+  ligand_entity_id: "L"
+  protein_entity_id: "A"
+  recycling_steps: 3
+  diffusion_samples: 5
+  output_format: "mmcif"
+  no_kernels: true                 # required for CPU / sm_70 (V100S)
+  # Pocket constraint settings (fed from CDD binding-site residues)
+  pocket_max_distance: 6.0         # Angstroms (4–20 supported)
+  pocket_force: true               # apply steering potential to enforce constraint
+  # Accelerator: "cpu" for local Mac, "gpu" for HPC
+  accelerator: "cpu"
+  extra_flags: ""
+
+# ── Stage 5: ChimeraX minimization ───────────────────────────────────────────
+# Full path to ChimeraX — shell aliases are NOT visible to Snakemake subshells
+chimerax_bin: "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX"
+
+# ── Stage 6: PLIP ────────────────────────────────────────────────────────────
+plip:
+  image: "docker.io/pharmai/plip:latest"
+  docker_memory: "16g"
+  docker_platform: "linux/amd64"   # needed on Apple Silicon; leave "" for native
+  receptor_chain: "A"
+  ligand_chain: "L"
+
+# ── Stage 7: pliparser / ChimeraX visualisation ──────────────────────────────
+visualization:
+  transparency: 65
+  receptor_color: "gray"
+  ligand_color: "green"
+
+# ── Output directories ────────────────────────────────────────────────────────
+dirs:
+  fasta:      "data/sequences"            # UniProt FASTA + per-protein FASTA
+  msa:        "data/msa"                  # ColabFold outputs (a3m / m8 / sh)
+  interpro:   "data/interpro"             # InterProScan JSON + binding-site TXT
+  templates:  "data/templates"            # mmCIF template files per conformation
+  boltz_in:   "data/boltz_inputs"         # generated Boltz-2 YAML inputs
+  boltz_out:  "results/boltz"             # Boltz-2 mmCIF outputs
+  minimized:  "results/minimized"         # ChimeraX PDB outputs
+  plip:       "results/plip"              # PLIP reports + CSVs + CXC scripts
+  logs:       "logs"

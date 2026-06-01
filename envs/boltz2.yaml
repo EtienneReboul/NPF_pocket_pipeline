@@ -1,0 +1,17 @@
+name: boltz2
+# Boltz-2 compute environment — CPU-first (local Mac M4 Max).
+# For HPC with SLURM + GPU, swap accelerator in config.yaml and
+# replace the pytorch entry with pytorch::pytorch=2.4.* + pytorch-cuda=12.4.
+#
+# Note: no_kernels: true in config.yaml disables triton/cuEquivariance,
+# which is required for CPU mode AND sm_70 (V100S) GPUs.
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - boltz
+      - "numpy>=1.26,<2.0"
+      - pyyaml>=6.0
