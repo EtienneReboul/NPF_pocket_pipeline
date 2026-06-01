@@ -31,14 +31,14 @@ protein–ligand interactions, and generate ChimeraX visualisation scripts.
 
 Conformations modelled (apo = no ligand, holo = ligand present):
 
-| Folder name             | State                    |
-|-------------------------|--------------------------|
-| `outward_open_apo`      | Outward-open, empty      |
-| `occluded_apo`          | Occluded, empty          |
-| `inward_open_apo`       | Inward-open, empty       |
-| `occluded_holo`         | Occluded + ligand        |
-| `outward_occluded_holo` | Outward-occluded + ligand|
-| `inward_occluded_holo`  | Inward-occluded + ligand |
+| Folder name             | State                     |
+| ----------------------- | ------------------------- |
+| `outward_open_apo`      | Outward-open, empty       |
+| `occluded_apo`          | Occluded, empty           |
+| `inward_open_apo`       | Inward-open, empty        |
+| `occluded_holo`         | Occluded + ligand         |
+| `outward_occluded_holo` | Outward-occluded + ligand |
+| `inward_occluded_holo`  | Inward-occluded + ligand  |
 
 ---
 
@@ -146,16 +146,16 @@ results/
 
 ## Key configuration options
 
-| Key | Description |
-|-----|-------------|
-| `boltz.accelerator` | `"cpu"` (local Mac) or `"gpu"` (HPC) |
-| `boltz.no_kernels` | `true` for CPU/V100S, `false` for A100/H100 |
+| Key                       | Description                                      |
+| --------------------------| -------------------------------------------------|
+| `boltz.accelerator`       | `"cpu"` (local Mac) or `"gpu"` (HPC)             |
+| `boltz.no_kernels`        | `true` for CPU/V100S, `false` for A100/H100      |
 | `boltz.diffusion_samples` | Number of structural samples per run (default 5) |
-| `boltz.ligand_smiles` | SMILES of the transported substrate |
-| `boltz.pocket_force` | `true` = enforce pocket via steering potential |
-| `templates.efflux` | `true` to include MFS-MDR efflux pump templates |
-| `plip.docker_platform` | `"linux/amd64"` needed on Apple Silicon |
-| `chimerax_bin` | Full path to ChimeraX executable |
+| `boltz.ligand_smiles`     | SMILES of the transported substrate              |
+| `boltz.pocket_force`      | `true` = enforce pocket via steering potential   |
+| `templates.efflux`        | `true` to include MFS-MDR efflux pump templates  |
+| `plip.docker_platform`    | `"linux/amd64"` needed on Apple Silicon          |
+| `chimerax_bin`            | Full path to ChimeraX executable                 |
 
 ---
 
@@ -189,11 +189,11 @@ snakemake --executor slurm --cores 100 --use-conda \
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
+| Symptom                          | Fix                                                                     |
+| -------------------------------- | ----------------------------------------------------------------------- |
 | `No cd174xx match` for a protein | Check InterProScan JSON manually; the protein may be unannotated in CDD |
-| `No .cif files` in templates dir | Check `data/templates.done`; rerun `download_templates` rule |
-| ChimeraX segfault | Verify `chimerax_bin` path; test with `chimerax --nogui --exit` |
-| Docker permission error | Ensure Docker is running; on Mac check Docker Desktop is open |
-| Boltz-2 OOM on CPU | Reduce `diffusion_samples` or `recycling_steps` in config.yaml |
-| PLIP segfault (exit 139) | Check PDB for broken backbone; `fix_pdb` step can be enabled if needed |
+| `No .cif files` in templates dir | Check `data/templates.done`; rerun `download_templates` rule            |
+| ChimeraX segfault                | Verify `chimerax_bin` path; test with `chimerax --nogui --exit`         |
+| Docker permission error          | Ensure Docker is running; on Mac check Docker Desktop is open           |
+| Boltz-2 OOM on CPU               | Reduce `diffusion_samples` or `recycling_steps` in config.yaml          |
+| PLIP segfault (exit 139)         | Check PDB for broken backbone; `fix_pdb` step can be enabled if needed  |
