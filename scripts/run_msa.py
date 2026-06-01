@@ -31,8 +31,6 @@ Usage (Snakemake calls this, but also works standalone):
 import argparse
 import gzip
 import io
-import json
-import os
 import re
 import tarfile
 import time
