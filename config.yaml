@@ -19,7 +19,7 @@ colabfold:
   delay: 8                         # seconds between submissions (rate limit)
   max_retries: 3
   poll_interval: 15                # seconds between status polls
-  poll_timeout: 900                # seconds before job times out
+  poll_timeout: 300                # seconds before job times out
 
 # ── Stage 2: InterProScan (EMBL-EBI REST) ────────────────────────────────────
 interproscan:
@@ -62,7 +62,7 @@ templates:
 # ── Stage 4: Boltz-2 ─────────────────────────────────────────────────────────
 boltz:
   # Ligand SMILES — used for all "holo" conformations
-  ligand_smiles: "[O-][N+](=O)[O-]"  # nitrate ion
+  ligand_smiles: "OC([C@H]1[C@@]2([H])[C@]3(OC([C@@]2([C@H](CC3)O)C)=O)[C@@]4([H])[C@]15C[C@@](CC4)(C(C5)=C)O)=O"  # Gibberellin A1 (GA1)
   ligand_entity_id: "L"
   protein_entity_id: "A"
   recycling_steps: 3
