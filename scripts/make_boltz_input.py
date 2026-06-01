@@ -6,25 +6,26 @@ Stage 4a of the NPF pipeline:
 Generate a Boltz-2 input YAML for one protein × one conformation.
 
 The pocket constraint block is populated from the CDD binding-site residues
-extracted in Stage 2, so Boltz-2 will steer the ligand toward the correct
-binding pocket.
+stored in cdd_summary.json (produced by run_interproscan.py in Stage 2).
 
 Usage (called by Snakemake rule `prepare_boltz_input`):
     python scripts/make_boltz_input.py \\
-        --fasta           data/sequences/NPF6.3_Q05085.fasta \\
-        --a3m             data/msa/a3m/NPF6.3_Q05085.a3m \\
-        --residues-file   data/interpro/NPF6.3_Q05085_binding_site_residues.txt \\
-        --templates-dir   data/templates/occluded_holo \\
-        --conformation    occluded_holo \\
-        --output          data/boltz_inputs/NPF6.3_Q05085/occluded_holo/target.yaml \\
-        --ligand-smiles   "[O-][N+](=O)[O-]" \\
-        --ligand-entity-id L \\
+        --fasta             data/sequences/NPF6.3_Q05085.fasta \\
+        --a3m               data/msa/a3m/NPF6.3_Q05085.a3m \\
+        --cdd-summary       data/interpro/cdd_summary.json \\
+        --protein-name      NPF6.3_Q05085 \\
+        --templates-dir     data/templates/occluded_holo \\
+        --conformation      occluded_holo \\
+        --output            data/boltz_inputs/NPF6.3_Q05085/occluded_holo/target.yaml \\
+        --ligand-smiles     "[O-][N+](=O)[O-]" \\
+        --ligand-entity-id  L \\
         --protein-entity-id A \\
         --pocket-max-distance 6.0 \\
-        --pocket-force    true
+        --pocket-force      true
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import yaml
@@ -37,8 +38,10 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--fasta",               required=True)
     p.add_argument("--a3m",                 required=True)
-    p.add_argument("--residues-file",       required=True,
-                   help="Comma-separated binding-site residues from InterProScan")
+    p.add_argument("--cdd-summary",         required=True,
+                   help="Path to cdd_summary.json from run_interproscan.py")
+    p.add_argument("--protein-name",        required=True,
+                   help="Protein key in cdd_summary.json, e.g. NPF6.3_Q05085")
     p.add_argument("--templates-dir",       required=True,
                    help="Folder of template .cif files for this conformation")
     p.add_argument("--conformation",        required=True,
@@ -66,11 +69,27 @@ def load_sequence(fasta_path: Path) -> str:
     return str(records[0].seq)
 
 
-def load_residues(residues_file: Path) -> list[int]:
-    text = residues_file.read_text().strip()
-    if not text:
+def load_residues_from_summary(summary_path: Path, protein_name: str) -> list[int]:
+    """
+    Extract binding-site residues for one protein from cdd_summary.json.
+
+    Expected JSON structure:
+    {
+      "NPF6.3_Q05085": {
+        "accession": "cd17416",
+        "subclade":  "MFS_NPF1_2",
+        "residues":  [45, 87, 123, ...]
+      }, ...
+    }
+    """
+    data = json.loads(summary_path.read_text())
+    if protein_name not in data:
+        print(
+            f"[boltz_input] WARNING: {protein_name} not found in {summary_path}. "
+            f"No pocket constraint will be applied."
+        )
         return []
-    return [int(r) for r in text.split(",") if r.strip().isdigit()]
+    return data[protein_name].get("residues", [])
 
 
 def collect_template_paths(templates_dir: Path) -> list[str]:
@@ -144,8 +163,6 @@ def build_yaml(
 
     # ── Pocket constraint ──────────────────────────────────────────────────────
     # Only meaningful for holo conformations (ligand must be present).
-    # We include it for apo too so the protein explores the right region,
-    # but without the ligand chain the binder field is omitted for apo.
     if binding_residues and is_holo(conformation):
         contacts = [[protein_entity_id, r] for r in binding_residues]
         doc["constraints"] = [
@@ -158,10 +175,6 @@ def build_yaml(
                 }
             }
         ]
-    elif binding_residues:
-        # Apo: record the pocket residues as metadata comment only — no ligand
-        # to steer, so we skip the constraint block (Boltz-2 would error).
-        pass
 
     return doc
 
@@ -171,14 +184,14 @@ def build_yaml(
 def main():
     args = parse_args()
 
-    fasta_path     = Path(args.fasta)
-    a3m_path       = Path(args.a3m)
-    residues_file  = Path(args.residues_file)
-    templates_dir  = Path(args.templates_dir)
-    output_path    = Path(args.output)
+    fasta_path    = Path(args.fasta)
+    a3m_path      = Path(args.a3m)
+    summary_path  = Path(args.cdd_summary)
+    templates_dir = Path(args.templates_dir)
+    output_path   = Path(args.output)
 
-    sequence        = load_sequence(fasta_path)
-    binding_residues = load_residues(residues_file)
+    sequence         = load_sequence(fasta_path)
+    binding_residues = load_residues_from_summary(summary_path, args.protein_name)
     template_paths   = collect_template_paths(templates_dir)
 
     doc = build_yaml(
@@ -200,7 +213,7 @@ def main():
 
     holo = is_holo(args.conformation)
     print(
-        f"[boltz_input] {output_path.parent.parent.name} × {args.conformation}: "
+        f"[boltz_input] {args.protein_name} × {args.conformation}: "
         f"{'holo' if holo else 'apo'}, "
         f"{len(binding_residues)} pocket residues, "
         f"{len(template_paths)} templates."

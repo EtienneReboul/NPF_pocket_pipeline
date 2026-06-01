@@ -37,56 +37,8 @@ import json
 import re
 from pathlib import Path
 from collections import defaultdict
-import yaml
-
-# ── Configuration loading ─────────────────────────────────────────────────────
-# config.yaml        — tracked by git, contains all defaults (email = placeholder)
-# config.local.yaml  — gitignored, contains your personal overrides (email, paths)
-#
-# To set up your local config:
-#   cp config.local.yaml.example config.local.yaml
-#   # then edit config.local.yaml with your email and ChimeraX path
 
 configfile: "config.yaml"
-
-def deep_update(base, overrides):
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            deep_update(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-local_config = Path("config.local.yaml")
-if local_config.exists():
-    with local_config.open() as handle:
-        local_overrides = yaml.safe_load(handle) or {}
-    deep_update(config, local_overrides)
-
-# Validate that the user has replaced the email placeholder
-_email = config.get("interproscan", {}).get("email", "")
-if _email in ("", "your@email.com", "firstname.lastname@institution.fr"):
-    raise ValueError(
-        "\n"
-        "═══════════════════════════════════════════════════════════\n"
-        " Missing personal configuration!\n"
-        "═══════════════════════════════════════════════════════════\n"
-        " The EMBL-EBI InterProScan API requires a valid email.\n"
-        "\n"
-        " Fix (takes 30 seconds):\n"
-        "   open config.local.yaml and set your email and ChimeraX path\n"
-        "═══════════════════════════════════════════════════════════\n"
-    )
-
-if config.get("chimerax_bin", "") in ("", "/path/to/ChimeraX", "CHANGE_ME"):
-    raise ValueError(
-        "\n"
-        "═══════════════════════════════════════════════════════════\n"
-        " Missing ChimeraX path!\n"
-        "═══════════════════════════════════════════════════════════\n"
-        " Set chimerax_bin in config.local.yaml to your local ChimeraX executable.\n"
-        "═══════════════════════════════════════════════════════════\n"
-    )
 
 # ── Directory shortcuts ────────────────────────────────────────────────────────
 DIRS         = config["dirs"]
@@ -235,10 +187,10 @@ rule download_templates:
 
 rule prepare_boltz_input:
     input:
-        fasta     = str(FASTA_DIR / "{protein}.fasta"),
-        a3m       = str(MSA_DIR / "a3m" / "{protein}.a3m"),
-        residues  = str(INTERPRO_DIR / "{protein}_binding_site_residues.txt"),
-        tmpl_done = str(TMPL_SENTINEL),
+        fasta       = str(FASTA_DIR / "{protein}.fasta"),
+        a3m         = str(MSA_DIR / "a3m" / "{protein}.a3m"),
+        cdd_summary = str(INTERPRO_DIR / "cdd_summary.json"),   # declared output of run_interproscan
+        tmpl_done   = str(TMPL_SENTINEL),
     output:
         yaml = str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
     params:
@@ -255,7 +207,8 @@ rule prepare_boltz_input:
         python scripts/make_boltz_input.py \\
             --fasta               {input.fasta} \\
             --a3m                 {input.a3m} \\
-            --residues-file       {input.residues} \\
+            --cdd-summary         {input.cdd_summary} \\
+            --protein-name        {wildcards.protein} \\
             --templates-dir       {params.templates_dir} \\
             --conformation        {wildcards.conformation} \\
             --output              {output.yaml} \\
@@ -306,45 +259,85 @@ rule run_boltz2:
 # (they include a hash/timestamp in the path). A checkpoint lets Snakemake
 # re-evaluate the DAG once the files exist.
 
+# ── Stage 6a: Discover Boltz-2 output CIFs (checkpoint) ──────────────────────
+# Boltz-2 writes CIF files under a content-hashed subdirectory whose name is
+# not known until the prediction finishes. This checkpoint globs the output
+# directory after run_boltz2 completes and records every CIF path in a JSON
+# manifest so that downstream rules can expand the {sample_id} wildcard.
+#
+# Boltz-2 output layout (example, 5 diffusion samples):
+#   results/boltz/{protein}/{conformation}/boltz_out/
+#     predictions/
+#       {protein}_target/          ← subfolder name matches input stem
+#         model_0.cif
+#         model_1.cif
+#         model_2.cif
+#         model_3.cif
+#         model_4.cif
+#
+# {sample_id} = CIF stem, e.g. "model_0", "model_1", ...
+
 checkpoint discover_boltz_outputs:
-    """
-    Triggered after run_boltz2 completes. Writes a JSON listing all CIF paths
-    so downstream rules can glob them deterministically.
-    """
     input:
         done = str(BOLTZ_OUT / "{protein}" / "{conformation}" / "prediction.done"),
     output:
         manifest = str(BOLTZ_OUT / "{protein}" / "{conformation}" / "cif_manifest.json"),
     run:
-        pred_root = Path(BOLTZ_OUT / wildcards.protein / wildcards.conformation
-                         / "boltz_out" / "predictions")
+        pred_root = (
+            Path(BOLTZ_OUT)
+            / wildcards.protein
+            / wildcards.conformation
+            / "boltz_out"
+            / "predictions"
+        )
         cifs = sorted(pred_root.glob("**/*.cif")) if pred_root.exists() else []
+        if not cifs:
+            raise RuntimeError(
+                f"No CIF files found under {pred_root}. "
+                "Check that run_boltz2 completed successfully."
+            )
         manifest = [str(c) for c in cifs]
         Path(output.manifest).write_text(json.dumps(manifest, indent=2))
-        print(f"[manifest] {wildcards.protein}/{wildcards.conformation}: {len(manifest)} CIFs")
+        print(
+            f"[manifest] {wildcards.protein}/{wildcards.conformation}: "
+            f"{len(manifest)} CIF(s) discovered"
+        )
 
 
-def get_cifs_from_manifest(wildcards):
-    manifest_path = checkpoints.discover_boltz_outputs.get(
-        protein=wildcards.protein,
-        conformation=wildcards.conformation,
-    ).output.manifest
-    return json.loads(Path(manifest_path).read_text())
+def _get_manifest(protein, conformation):
+    """Return the parsed CIF manifest list for one protein × conformation."""
+    cp = checkpoints.discover_boltz_outputs.get(
+        protein=protein,
+        conformation=conformation,
+    )
+    return json.loads(Path(cp.output.manifest).read_text())
 
 
-def sample_id_from_cif(cif_path: str) -> str:
+def _sample_ids(protein, conformation):
+    """Return the list of sample_id strings (CIF stems) for one run."""
+    return [Path(c).stem for c in _get_manifest(protein, conformation)]
+
+
+def _cif_for_sample(wildcards):
     """
-    Derive a stable sample ID from the CIF filename.
-    Boltz-2 writes model_0.cif, model_1.cif, ... inside a prediction sub-folder.
+    Input function for minimize_cif: return the actual CIF path that corresponds
+    to this protein × conformation × sample_id combination.
     """
-    return Path(cif_path).stem   # e.g. "model_0"
+    cifs = _get_manifest(wildcards.protein, wildcards.conformation)
+    for cif in cifs:
+        if Path(cif).stem == wildcards.sample_id:
+            return cif
+    raise RuntimeError(
+        f"CIF not found for sample_id='{wildcards.sample_id}' in "
+        f"{wildcards.protein}/{wildcards.conformation}"
+    )
 
 
-# ── Stage 6: ChimeraX minimization ───────────────────────────────────────────
+# ── Stage 6b: ChimeraX minimization ──────────────────────────────────────────
 
 rule minimize_cif:
     input:
-        cif = lambda wc: str(wc.cif_path),
+        cif = _cif_for_sample,
     output:
         pdb = str(MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"),
     params:
@@ -371,13 +364,17 @@ rule run_plip:
             / "model_minimized_report" / "model_minimized_report.txt"
         ),
     params:
-        image             = PLIP_CFG["image"],
-        docker_memory     = PLIP_CFG["docker_memory"],
-        platform_flag     = f"--platform {PLIP_CFG['docker_platform']}" if PLIP_CFG.get("docker_platform") else "",
-        receptor_chain    = PLIP_CFG["receptor_chain"],
-        ligand_chain      = PLIP_CFG["ligand_chain"],
-        chains_flag       = f'--chains "[[\\"{PLIP_CFG["receptor_chain"]}\\",\\"{PLIP_CFG["ligand_chain"]}\\""]]"',
-        report_dir        = str(
+        image         = PLIP_CFG["image"],
+        docker_memory = PLIP_CFG["docker_memory"],
+        platform_flag = (
+            f"--platform {PLIP_CFG['docker_platform']}"
+            if PLIP_CFG.get("docker_platform") else ""
+        ),
+        chains_flag   = (
+            f'--chains "[[\\"{PLIP_CFG["receptor_chain"]}\\","'
+            f'\\"{PLIP_CFG["ligand_chain"]}\\""]]"'
+        ),
+        report_dir    = str(
             PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
             / "model_minimized_report"
         ),
@@ -445,7 +442,7 @@ rule csv_to_cxc:
             PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
             / "model_minimized_report" / "interaction.cxc"
         ),
-        config = str(
+        config_json = str(
             PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
             / "model_minimized_report" / "cxc-config.json"
         ),
@@ -463,18 +460,18 @@ rule csv_to_cxc:
         """
         python scripts/make_cxc_config.py \\
             --pdb             {input.pdb} \\
-            --output          {output.config} \\
+            --output          {output.config_json} \\
             --receptor-chain  {params.receptor_chain} \\
             --ligand-chain    {params.ligand_chain} \\
             --transparency    {params.transparency} \\
             --receptor-color  {params.receptor_color} \\
             --ligand-color    {params.ligand_color} \\
-        >> {log} 2>&1
+        > {log} 2>&1
 
         pliparser csv2cxc \\
             --input  {input.csv_dir} \\
             --output {output.cxc} \\
-            --config {output.config} \\
+            --config {output.config_json} \\
         >> {log} 2>&1
         """
 
@@ -483,18 +480,17 @@ rule csv_to_cxc:
 
 def summaries_for_protein_conformation(wildcards):
     """
-    Collect all per-sample summary CSVs for one protein × conformation.
-    Requires the discover_boltz_outputs checkpoint to have run.
+    Expand the list of per-sample summary CSVs for one protein × conformation.
+    Called after discover_boltz_outputs checkpoint has written the manifest,
+    so sample_ids are known and the full list of expected CSVs can be returned.
     """
-    manifest_path = checkpoints.discover_boltz_outputs.get(
-        protein=wildcards.protein,
-        conformation=wildcards.conformation,
-    ).output.manifest
-    cifs = json.loads(Path(manifest_path).read_text())
+    sample_ids = _sample_ids(wildcards.protein, wildcards.conformation)
     return [
-        str(PLIP_DIR / wildcards.protein / wildcards.conformation
-            / Path(c).stem / "model_minimized_report" / "csv" / "summary.csv")
-        for c in cifs
+        str(
+            PLIP_DIR / wildcards.protein / wildcards.conformation
+            / sid / "model_minimized_report" / "csv" / "summary.csv"
+        )
+        for sid in sample_ids
     ]
 
 
@@ -519,22 +515,44 @@ rule aggregate_plip:
 # ─────────────────────────────────────────────────────────────────────────────
 # RULE ALL — top-level target
 # ─────────────────────────────────────────────────────────────────────────────
+# Snakemake checkpoint pattern (Snakemake 8):
+#
+#   When an input function calls checkpoints.X.get() and the checkpoint has
+#   NOT yet run, Snakemake raises IncompleteCheckpointException internally.
+#   This exception MUST propagate uncaught — that is the signal Snakemake
+#   uses to know it must execute the checkpoint first, then re-evaluate.
+#   Catching it causes Snakemake to see an empty list and exit immediately.
+#
+#   Two-checkpoint cascade:
+#     1. msa_checkpoint            → produces the protein list
+#     2. discover_boltz_outputs    → produces sample_ids per protein×conformation
 
 def all_final_outputs(wildcards):
     """
-    Compute all expected final outputs once the MSA sentinel is available.
-    Returns: list of aggregate summary CSV paths (one per protein × conformation).
+    Return all final aggregate CSVs (one per protein × conformation).
+
+    IncompleteCheckpointException must NOT be caught here — Snakemake
+    uses it to schedule the required checkpoint and retry automatically.
     """
-    proteins = read_proteins(checkpoints.msa_checkpoint.get().output.sentinel)
-    targets  = []
+    # Raises IncompleteCheckpointException if MSA not done yet → triggers msa_checkpoint
+    sentinel = checkpoints.msa_checkpoint.get().output.sentinel
+    proteins = read_proteins(sentinel)
+
+    targets = []
     for protein in proteins:
         for conformation in CONFORMATIONS:
+            # Raises IncompleteCheckpointException if Boltz-2 not done yet
+            # → triggers discover_boltz_outputs for this protein × conformation
+            _sample_ids(protein, conformation)
+
             targets.append(
                 str(PLIP_DIR / protein / conformation / "summary.csv")
             )
+
     return targets
 
 
 rule all:
+    default_target: True
     input:
-        all_final_outputs,
+        all_final_outputs
