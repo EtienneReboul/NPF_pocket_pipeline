@@ -21,11 +21,13 @@
 # Usage:
 #   bash submit_boltz2.sh                                   # defaults
 #   bash submit_boltz2.sh --dry-run                         # show plan only
+#   bash submit_boltz2.sh --test                            # submit task 0 only (QoS-safe test)
 #   bash submit_boltz2.sh --batch-size 20                   # predictions per task
 #   bash submit_boltz2.sh --max-concurrent 10               # max parallel tasks
 #   bash submit_boltz2.sh --gres gpu:3g.20gb:1              # IFB A100 20GB slice
 #   bash submit_boltz2.sh --gres gpu:7g.40gb:1              # IFB A100 full 40GB
 #   bash submit_boltz2.sh --gres gpu:tesla:1                # V100S
+#   bash submit_boltz2.sh --test --gres gpu:3g.20gb:1       # test on IFB
 #   bash submit_boltz2.sh --batch-size 20 --max-concurrent 5 --dry-run
 #
 # The script is idempotent: predictions with prediction.done are skipped.
@@ -57,6 +59,7 @@ ACCOUNT=""
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 DRY_RUN=false
+TEST_MODE=false   # --test: submit only task 0 to verify config before full run
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -74,9 +77,11 @@ while [[ $# -gt 0 ]]; do
             MAX_CONCURRENT="$2"; shift 2 ;;
         --max-concurrent=*)
             MAX_CONCURRENT="${1#--max-concurrent=}"; shift ;;
+        --test)
+            TEST_MODE=true; shift ;;
         *)
             echo "ERROR: unknown argument '$1'"
-            echo "Usage: bash submit_boltz2.sh [--dry-run] [--gres <profile>]"
+            echo "Usage: bash submit_boltz2.sh [--dry-run] [--test] [--gres <profile>]"
             echo "                             [--batch-size N] [--max-concurrent N]"
             exit 1 ;;
     esac
@@ -129,6 +134,9 @@ echo " GRES                : $GRES"
 echo " Time limit/task     : ${TIME} min"
 if $DRY_RUN; then
     echo " Mode                : DRY RUN (nothing submitted)"
+fi
+if $TEST_MODE; then
+    echo " Mode                : TEST — task 0 only ($(( BATCH_SIZE < TOTAL ? BATCH_SIZE : TOTAL )) prediction(s))"
 fi
 echo "============================================================"
 echo ""
@@ -183,6 +191,14 @@ fi
 # ── Submit the job array ──────────────────────────────────────────────────────
 LOG_DIR="$MANIFEST_DIR/logs"
 mkdir -p "$LOG_DIR"
+
+# In test mode, override the array spec to task 0 only (no % limit needed)
+if $TEST_MODE; then
+    ARRAY_SPEC="0"
+    echo "TEST MODE: submitting task 0 only (${BATCH_SIZE} prediction(s))"
+    echo "           Once it completes successfully, run without --test for the full array."
+    echo ""
+fi
 
 sbatch \
     --partition="$PARTITION" \
