@@ -3,31 +3,37 @@
 # submit_boltz2.sh — Stage 5: Boltz-2 structure prediction on HPC
 # =============================================================================
 #
-# Submits one SLURM job per protein × conformation combination.
-# Reads the protein list from data/msa/msa.done (written by Snakefile_preprocess).
-# Reads conformations from the data/boltz_inputs directory structure.
+# Collects all pending protein × conformation predictions, packs them into
+# batches, and submits a single SLURM job array — one array task per batch.
+# Max concurrent tasks is controlled with --max-concurrent (uses % syntax).
+#
+# With ~8 min/prediction on A100 and --batch-size 20:
+#   20 × 8 min = ~160 min per array task → fits in a 4-hour slot.
+#
+# Example: 317 pending predictions, batch-size 20, max-concurrent 10
+#   → 16 array tasks (0-15), at most 10 running at once → sbatch --array=0-15%10
 #
 # Prerequisites:
-#   - Snakefile_preprocess must have completed (all target.yaml files exist)
-#   - conda env "boltz2" must exist on the cluster
-#   - Run this script from the pipeline root directory
+#   - Snakefile_preprocess completed (all target.yaml files exist)
+#   - conda env "boltz2" exists on the cluster
+#   - Run from the pipeline root directory
 #
 # Usage:
-#   bash submit_boltz2.sh                             # submit all pending jobs
-#   bash submit_boltz2.sh --dry-run                   # show plan without submitting
-#   bash submit_boltz2.sh --gres gpu:3g.20gb:1        # IFB A100 20GB MIG slice
-#   bash submit_boltz2.sh --gres gpu:7g.40gb:1        # IFB A100 full 40GB card
-#   bash submit_boltz2.sh --gres gpu:tesla:1          # old cluster (V100S)
-#   bash submit_boltz2.sh --gres gpu:tesla:1 --dry-run  # combine flags freely
+#   bash submit_boltz2.sh                                   # defaults
+#   bash submit_boltz2.sh --dry-run                         # show plan only
+#   bash submit_boltz2.sh --batch-size 20                   # predictions per task
+#   bash submit_boltz2.sh --max-concurrent 10               # max parallel tasks
+#   bash submit_boltz2.sh --gres gpu:3g.20gb:1              # IFB A100 20GB slice
+#   bash submit_boltz2.sh --gres gpu:7g.40gb:1              # IFB A100 full 40GB
+#   bash submit_boltz2.sh --gres gpu:tesla:1                # V100S
+#   bash submit_boltz2.sh --batch-size 20 --max-concurrent 5 --dry-run
 #
-# The script is idempotent: jobs with prediction.done are skipped.
+# The script is idempotent: predictions with prediction.done are skipped.
 # =============================================================================
 
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-# Edit these to match your cluster and config.yaml
-
 BOLTZ_INPUTS="data/boltz_inputs"
 BOLTZ_RESULTS="results/boltz"
 CONDA_ENV="boltz2"
@@ -37,163 +43,218 @@ RECYCLING_STEPS=3
 DIFFUSION_SAMPLES=5
 OUTPUT_FORMAT="mmcif"
 
-# SLURM resources
+# Batching
+BATCH_SIZE=20       # predictions per array task (~8 min each on A100 → 160 min/task)
+MAX_CONCURRENT=10   # max array tasks running at once (SLURM % syntax)
+
+# SLURM resources (per array task)
 PARTITION="gpu"
 CPUS=8
 MEM="64G"
-GRES="gpu:3g.20gb:1"   # default — override with --gres <profile> on the command line
-TIME=240   # minutes per job (4 hours)
-             # GPU (V100S): ~8 min/job → 4h is very generous, reduce if queue is busy
-             # GPU (A100):  ~3 min/job → could use TIME=30
-ACCOUNT=""  # set if your cluster requires --account
+GRES="gpu:3g.20gb:1"   # IFB A100 20GB MIG — override with --gres
+TIME=240                # minutes per task
+ACCOUNT=""
 
-# ── Parse flags ───────────────────────────────────────────────────────────────
+# ── Parse arguments ───────────────────────────────────────────────────────────
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run|-n)
-            DRY_RUN=true
-            shift
-            ;;
+            DRY_RUN=true; shift ;;
         --gres)
-            GRES="$2"
-            shift 2
-            ;;
+            GRES="$2"; shift 2 ;;
         --gres=*)
-            GRES="${1#--gres=}"
-            shift
-            ;;
+            GRES="${1#--gres=}"; shift ;;
+        --batch-size)
+            BATCH_SIZE="$2"; shift 2 ;;
+        --batch-size=*)
+            BATCH_SIZE="${1#--batch-size=}"; shift ;;
+        --max-concurrent)
+            MAX_CONCURRENT="$2"; shift 2 ;;
+        --max-concurrent=*)
+            MAX_CONCURRENT="${1#--max-concurrent=}"; shift ;;
         *)
             echo "ERROR: unknown argument '$1'"
-            echo "Usage: bash submit_boltz2.sh [--dry-run] [--gres <gpu_profile>]"
-            exit 1
-            ;;
+            echo "Usage: bash submit_boltz2.sh [--dry-run] [--gres <profile>]"
+            echo "                             [--batch-size N] [--max-concurrent N]"
+            exit 1 ;;
     esac
 done
 
 # ── Validate prerequisites ────────────────────────────────────────────────────
-SENTINEL="data/msa/msa.done"
-if [[ ! -f "$SENTINEL" ]]; then
-    echo "ERROR: $SENTINEL not found."
-    echo "       Run Snakefile_preprocess first:"
-    echo "       snakemake -s Snakefile_preprocess --cores 4"
+if [[ ! -f "data/msa/msa.done" ]]; then
+    echo "ERROR: data/msa/msa.done not found. Run Snakefile_preprocess first."
     exit 1
 fi
-
 if [[ ! -d "$BOLTZ_INPUTS" ]]; then
-    echo "ERROR: $BOLTZ_INPUTS not found."
-    echo "       Run Snakefile_preprocess first."
+    echo "ERROR: $BOLTZ_INPUTS not found. Run Snakefile_preprocess first."
     exit 1
 fi
 
-# ── Build account flag if needed ──────────────────────────────────────────────
 ACCOUNT_FLAG=""
-if [[ -n "$ACCOUNT" ]]; then
-    ACCOUNT_FLAG="--account=$ACCOUNT"
-fi
+[[ -n "$ACCOUNT" ]] && ACCOUNT_FLAG="--account=$ACCOUNT"
 
-# ── Submit jobs ───────────────────────────────────────────────────────────────
-echo "============================================================"
-echo " Boltz-2 SLURM batch submission"
-echo " Inputs:  $BOLTZ_INPUTS"
-echo " Results: $BOLTZ_RESULTS"
-echo " Samples: $DIFFUSION_SAMPLES"
-if $DRY_RUN; then
-    echo " Mode:    DRY RUN (no jobs submitted)"
-fi
-echo "============================================================"
-echo ""
-
-submitted=0
+# ── Collect pending predictions ───────────────────────────────────────────────
+PENDING_YAMLS=()
+PENDING_DONE=()
 skipped=0
-missing=0
 
-# Walk every protein × conformation that has a target.yaml
 for YAML in "$BOLTZ_INPUTS"/*/*/target.yaml; do
     [[ -f "$YAML" ]] || continue
-
-    # Extract protein and conformation from path
     CONF=$(basename "$(dirname "$YAML")")
     PROTEIN=$(basename "$(dirname "$(dirname "$YAML")")")
-
     DONE_FILE="$BOLTZ_RESULTS/$PROTEIN/$CONF/prediction.done"
-    OUT_DIR="$BOLTZ_RESULTS/$PROTEIN/$CONF/boltz_out"
-    LOG_DIR="$BOLTZ_RESULTS/$PROTEIN/$CONF/logs"
-
-    # Skip completed
     if [[ -f "$DONE_FILE" ]]; then
         skipped=$((skipped + 1))
         continue
     fi
+    PENDING_YAMLS+=("$YAML")
+    PENDING_DONE+=("$DONE_FILE")
+done
 
-    echo "[PENDING] $PROTEIN / $CONF"
+TOTAL=${#PENDING_YAMLS[@]}
+N_TASKS=$(( (TOTAL + BATCH_SIZE - 1) / BATCH_SIZE ))   # ceiling division
+LAST_TASK=$(( N_TASKS - 1 ))
+ARRAY_SPEC="0-${LAST_TASK}%${MAX_CONCURRENT}"
 
-    if $DRY_RUN; then
-        submitted=$((submitted + 1))
-        continue
-    fi
+echo "============================================================"
+echo " Boltz-2 SLURM job array submission"
+echo " Pending predictions : $TOTAL"
+echo " Already done        : $skipped"
+echo " Batch size          : $BATCH_SIZE predictions/task"
+echo " Array tasks         : $N_TASKS  (--array=${ARRAY_SPEC})"
+echo " Max concurrent      : $MAX_CONCURRENT"
+echo " GRES                : $GRES"
+echo " Time limit/task     : ${TIME} min"
+if $DRY_RUN; then
+    echo " Mode                : DRY RUN (nothing submitted)"
+fi
+echo "============================================================"
+echo ""
 
-    mkdir -p "$OUT_DIR" "$LOG_DIR"
+if [[ $TOTAL -eq 0 ]]; then
+    echo "Nothing to do — all predictions already complete."
+    exit 0
+fi
 
-    sbatch \
-        --partition="$PARTITION" \
-        --nodes=1 \
-        --ntasks=1 \
-        --cpus-per-task="$CPUS" \
-        --mem="$MEM" \
-        --gres="$GRES" \
-        --time="$TIME" \
-        $ACCOUNT_FLAG \
-        --job-name="b2_${PROTEIN:0:6}_${CONF:0:6}" \
-        --output="$LOG_DIR/boltz2.log" \
-        --error="$LOG_DIR/boltz2.err" \
-        << SLURM_SCRIPT
+# ── Write the batch manifest ──────────────────────────────────────────────────
+# One line per pending prediction: "yaml|out_dir|done_file"
+# The array task uses $SLURM_ARRAY_TASK_ID to pick its slice of lines.
+
+MANIFEST_DIR="$BOLTZ_RESULTS/array_manifest"
+mkdir -p "$MANIFEST_DIR"
+MANIFEST="$MANIFEST_DIR/manifest.txt"
+
+: > "$MANIFEST"   # truncate
+for (( i=0; i<TOTAL; i++ )); do
+    yaml="${PENDING_YAMLS[$i]}"
+    done_file="${PENDING_DONE[$i]}"
+    conf=$(basename "$(dirname "$yaml")")
+    protein=$(basename "$(dirname "$(dirname "$yaml")")")
+    out_dir="$BOLTZ_RESULTS/$protein/$conf/boltz_out"
+    mkdir -p "$out_dir" "$BOLTZ_RESULTS/$protein/$conf/logs"
+    echo "${yaml}|${out_dir}|${done_file}" >> "$MANIFEST"
+done
+
+echo "Manifest written: $MANIFEST ($TOTAL lines)"
+echo ""
+
+if $DRY_RUN; then
+    echo "Dry-run — array tasks breakdown:"
+    for (( task=0; task<N_TASKS; task++ )); do
+        start=$(( task * BATCH_SIZE ))
+        end=$(( start + BATCH_SIZE - 1 ))
+        [[ $end -ge $TOTAL ]] && end=$(( TOTAL - 1 ))
+        count=$(( end - start + 1 ))
+        echo "  Task $task: $count prediction(s) (lines $((start+1))–$((end+1)))"
+        for (( i=start; i<=end; i++ )); do
+            yaml="${PENDING_YAMLS[$i]}"
+            conf=$(basename "$(dirname "$yaml")")
+            protein=$(basename "$(dirname "$(dirname "$yaml")")")
+            echo "    $protein / $conf"
+        done
+    done
+    echo ""
+    echo "Would submit: sbatch --array=${ARRAY_SPEC} ..."
+    exit 0
+fi
+
+# ── Submit the job array ──────────────────────────────────────────────────────
+LOG_DIR="$MANIFEST_DIR/logs"
+mkdir -p "$LOG_DIR"
+
+sbatch \
+    --partition="$PARTITION" \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="$CPUS" \
+    --mem="$MEM" \
+    --gres="$GRES" \
+    --time="$TIME" \
+    --array="${ARRAY_SPEC}" \
+    $ACCOUNT_FLAG \
+    --job-name="boltz2_array" \
+    --output="$LOG_DIR/task_%a.log" \
+    --error="$LOG_DIR/task_%a.err" \
+    << SLURM_SCRIPT
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[\$(date)] Boltz-2 — $PROTEIN × $CONF"
-echo "  YAML:    $YAML"
-echo "  Out dir: $OUT_DIR"
-echo "  Samples: $DIFFUSION_SAMPLES"
+TASK_ID=\$SLURM_ARRAY_TASK_ID
+BATCH_SIZE=$BATCH_SIZE
+MANIFEST="$MANIFEST"
 
-# Activate conda env on IFB (uses module system, not conda base path)
+echo "[\$(date)] Array task \$TASK_ID — batch size $BATCH_SIZE"
+echo "  Manifest: \$MANIFEST"
+
+# Activate conda
 module load conda
 source activate "$CONDA_ENV"
 
-echo "[\$(date)] Python: \$(which python)"
-echo "[\$(date)] CUDA:   \$(python -c 'import torch; print(torch.cuda.is_available())')"
-echo "[\$(date)] GPU:    \$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
+echo "[\$(date)] Python : \$(which python)"
+echo "[\$(date)] CUDA   : \$(python -c 'import torch; print(torch.cuda.is_available())')"
+echo "[\$(date)] GPU    : \$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
 
-boltz predict \\
-    "$YAML" \\
-    --out_dir "$OUT_DIR" \\
-    --recycling_steps $RECYCLING_STEPS \\
-    --diffusion_samples $DIFFUSION_SAMPLES \\
-    --output_format $OUTPUT_FORMAT \\
-    # --no_kernels   # remove this comment for V100S/CPU; A100 does NOT need this
+# Compute line range for this task (1-based for sed)
+LINE_START=\$(( TASK_ID * BATCH_SIZE + 1 ))
+LINE_END=\$(( LINE_START + BATCH_SIZE - 1 ))
 
-echo "\$(date): prediction finished" > "$DONE_FILE"
-echo "[\$(date)] Done."
+echo "[\$(date)] Processing manifest lines \$LINE_START–\$LINE_END"
+echo ""
+
+while IFS='|' read -r yaml out_dir done_file; do
+    [[ -z "\$yaml" ]] && continue
+
+    conf=\$(basename "\$(dirname "\$yaml")")
+    protein=\$(basename "\$(dirname "\$(dirname "\$yaml")")")
+
+    if [[ -f "\$done_file" ]]; then
+        echo "[\$(date)] SKIP: \$protein / \$conf (already done)"
+        continue
+    fi
+
+    echo "[\$(date)] START: \$protein / \$conf"
+
+    boltz predict \\
+        "\$yaml" \\
+        --out_dir "\$out_dir" \\
+        --recycling_steps $RECYCLING_STEPS \\
+        --diffusion_samples $DIFFUSION_SAMPLES \\
+        --output_format $OUTPUT_FORMAT
+    # --no_kernels  ← uncomment for V100S or CPU; not needed for A100
+
+    echo "\$(date): prediction finished" > "\$done_file"
+    echo "[\$(date)] DONE:  \$protein / \$conf"
+    echo ""
+
+done < <(sed -n "\${LINE_START},\${LINE_END}p" "\$MANIFEST")
+
+echo "[\$(date)] Array task \$TASK_ID complete."
 SLURM_SCRIPT
 
-    echo "  → submitted"
-    submitted=$((submitted + 1))
-
-done
-
+echo "Job array submitted: --array=${ARRAY_SPEC}"
 echo ""
-echo "============================================================"
-if $DRY_RUN; then
-    echo " Would submit: $submitted jobs"
-else
-    echo " Submitted:    $submitted jobs"
-fi
-echo " Skipped:      $skipped (already done)"
-echo "============================================================"
-echo ""
-if ! $DRY_RUN && (( submitted > 0 )); then
-    echo "Monitor with:"
-    echo "  squeue -u \$USER"
-    echo "  tail -f $BOLTZ_RESULTS/<protein>/<conformation>/logs/boltz2.log"
-fi
+echo "Monitor with:"
+echo "  squeue -u \$USER"
+echo "  tail -f $LOG_DIR/task_0.log"
