@@ -1,38 +1,59 @@
 # NPF Family Structure Modelling Pipeline
 
-End-to-end Snakemake workflow to model the Arabidopsis Nitrate Peptide
-Transporter Family (NPF) in six rocking-switch conformations, profile
-protein–ligand interactions, and generate ChimeraX visualisation scripts.
+End-to-end workflow to model the Arabidopsis Nitrate Peptide Transporter Family
+(NPF) in six rocking-switch conformations, profile protein–ligand interactions,
+and generate ChimeraX visualisation scripts.
+
+The pipeline is split into three independent parts so that the GPU-intensive
+Boltz-2 step can run on an HPC cluster while pre- and post-processing run
+locally.
 
 ---
 
 ## Pipeline overview
 
 ```text
-1. MSA           UniProt → per-protein FASTA + ColabFold MSA (.a3m)
-       ↓
-2. InterProScan  EMBL-EBI CDD → binding-site residues per protein (cd174xx)
-       ↓
-3. Templates     RCSB → mmCIF templates per conformation folder
-       ↓
-4. Boltz-2 input  per protein × conformation → target.yaml
-    (pocket constraint from CDD residues, holo/apo from folder name)
-       ↓
-5. Boltz-2 run   → mmCIF structure predictions (N diffusion samples)
-       ↓
-6. Minimize      ChimeraX energy minimization → PDB per sample
-       ↓
-7. PLIP          Docker → protein–ligand interaction report per sample
-       ↓
-8. pliparser     → CSV interaction tables + ChimeraX .cxc scripts
-       ↓
-9. Aggregate     → summary.csv per protein × conformation  ★
+┌─────────────────────────────────────────────────────┐
+│  PRE-PROCESSING (local)   Snakefile_preprocess       │
+│                                                      │
+│  1. MSA          UniProt → ColabFold MSA (.a3m)      │
+│        ↓                                             │
+│  2. InterProScan EMBL-EBI CDD → binding-site residues│
+│        ↓                                             │
+│  3. Templates    RCSB → mmCIF per conformation       │
+│        ↓                                             │
+│  4. Boltz-2 YAML per protein × conformation          │
+└──────────────────────────┬──────────────────────────┘
+                           │  rsync data/boltz_inputs/
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│  PROCESSING (HPC cluster)   submit_boltz2.sh         │
+│                                                      │
+│  5. Boltz-2 run → mmCIF structures (N samples)       │
+│     one SLURM job per protein × conformation         │
+└──────────────────────────┬──────────────────────────┘
+                           │  rsync results/boltz/
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│  POST-PROCESSING (local)  Snakefile_postprocess      │
+│                                                      │
+│  6. Minimize    ChimeraX → PDB per sample            │
+│        ↓                                             │
+│  7. PLIP        Docker → interaction report          │
+│        ↓                                             │
+│  8. pliparser   → CSV tables + ChimeraX .cxc scripts │
+│        ↓                                             │
+│  9. Aggregate   → summary.csv per protein×conformation│
+└─────────────────────────────────────────────────────┘
 ```
+
+> A monolithic `Snakefile` covering all 9 stages is also provided for
+> single-machine runs (e.g. with MPS on Apple Silicon or a local GPU).
 
 Conformations modelled (apo = no ligand, holo = ligand present):
 
 | Folder name             | State                     |
-| ----------------------- | ------------------------- |
+|-------------------------|---------------------------|
 | `outward_open_apo`      | Outward-open, empty       |
 | `occluded_apo`          | Occluded, empty           |
 | `inward_open_apo`       | Inward-open, empty        |
@@ -46,9 +67,16 @@ Conformations modelled (apo = no ligand, holo = ligand present):
 
 ```text
 npf_workflow/
-├── Snakefile
-├── config.yaml
-├── config.local.yaml  ← Needs to be created             
+├── Snakefile                   ← monolithic pipeline (all 9 stages)
+├── worflows/
+│   ├── preprocessing/
+│   │   └── Snakefile           ← stages 6–9 (local)             
+│   ├── processing/
+│   │   └──submit_boltz2.sh     ← stage 5 SLURM submission (cluster)  
+│   ├── postprocessing/
+│       └──Snakefile            ← stages 6–9 (local)        
+├── config.yaml                 ← shared defaults (tracked by git)
+├── config.local.yaml           ← personal overrides — CREATE THIS FIRST
 ├── envs/
 │   ├── pipeline.yaml           ← controller env (install once)
 │   ├── boltz2.yaml             ← Boltz-2 compute env
@@ -60,10 +88,9 @@ npf_workflow/
 │   ├── download_templates.py   ← Stage 3: RCSB mmCIF download
 │   ├── make_boltz_input.py     ← Stage 4: Boltz-2 YAML generator
 │   ├── minimize_cif.py         ← Stage 6: ChimeraX minimization
-│   ├── fix_pdb.py              ← (optional) TER/heavy-atom repair
 │   ├── make_cxc_config.py      ← Stage 8: pliparser CXC config
 │   ├── aggregate_plip_summary.py ← Stage 9: CSV merger
-│   └── aggregate_summaries.py  ← (legacy, kept for reference)
+│   └── fix_pdb.py              ← (optional) TER/heavy-atom repair
 └── data/                       ← created automatically
     ├── sequences/              ← FASTA files
     ├── msa/                    ← ColabFold outputs
@@ -76,15 +103,21 @@ npf_workflow/
 
 ## Quick start
 
-### 1. Create config.local.yaml
+### 1. Create config.local.yaml (required)
 
-Keep shared defaults in config.yaml and put personal values in config.local.yaml.
-Snakemake loads config.yaml first and then applies config.local.yaml on top of it.
-Create by copy/pasting config.local.yaml and then edit with your real values:
+`config.yaml` is tracked by git and contains shared defaults. Personal values
+(email, local paths) go in `config.local.yaml`, which is gitignored.
+
+```bash
+cp config.local.yaml.example config.local.yaml
+# then edit config.local.yaml
+```
+
+Minimum required values:
 
 ```yaml
 interproscan:
-       email: "your@email.com"       # your real email, used locally only
+  email: "your@email.com"     # required by EMBL-EBI API
 
 chimerax_bin: "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX"
 ```
@@ -102,20 +135,71 @@ conda activate npf-pipeline
 docker pull docker.io/pharmai/plip:latest
 ```
 
-### 4. Dry-run — check the plan
+---
+
+## Running the split pipeline (recommended)
+
+### Part 1 — Pre-processing (local)
+
+Runs stages 1–4. Produces one `target.yaml` per protein × conformation.
 
 ```bash
+snakemake -s Snakefile_preprocess --cores 4
+```
+
+### Part 2 — Processing (HPC cluster)
+
+Transfer inputs to the cluster, submit Boltz-2 jobs, then transfer results back.
+
+```bash
+# 1. Transfer inputs to cluster
+rsync -av data/boltz_inputs/ user@cluster:project/data/boltz_inputs/
+rsync -av data/msa/msa.done  user@cluster:project/data/msa/
+
+# 2. On the cluster — dry-run first to check the plan
+bash submit_boltz2.sh --dry-run
+
+# 3. Submit all jobs
+bash submit_boltz2.sh
+
+# 4. Monitor
+squeue -u $USER
+
+# 5. Transfer results back when complete
+rsync -av user@cluster:project/results/boltz/ results/boltz/
+```
+
+Edit the SLURM settings at the top of `submit_boltz2.sh` to match your cluster
+(partition, GPU type, account, etc.).
+
+### Part 3 — Post-processing (local)
+
+Runs stages 6–9. Discovers Boltz-2 CIF outputs automatically by globbing
+`results/boltz/`. Skips any protein × conformation without a `prediction.done`.
+
+```bash
+snakemake -s Snakefile_postprocess --cores 10 --use-conda
+```
+
+> Tip: control CPU usage with `OMP_NUM_THREADS` and `MKL_NUM_THREADS`
+> if ChimeraX saturates your machine during minimization.
+
+---
+
+## Running the monolithic pipeline (single machine)
+
+For single-machine runs (local GPU or Apple Silicon MPS):
+
+```bash
+# Dry-run
 snakemake -n --use-conda
+
+# Full run
+snakemake --cores 10 --use-conda
 ```
 
-### 5. Full run
-
-```bash
-snakemake --cores 4 --use-conda
-```
-
-> On first run, Snakemake builds per-rule conda environments automatically.
-> This takes a few minutes once, then they are cached.
+Set `accelerator: "mps"` in `config.yaml` to use Apple Silicon GPU acceleration,
+which reduces Boltz-2 runtime from ~30 min to ~2 min per job.
 
 ---
 
@@ -138,62 +222,46 @@ results/
         │       ├── model_minimized_report.txt
         │       ├── model_minimized_protonated.pdb
         │       ├── csv/summary.csv
-        │       └── interaction.cxc             ← open in ChimeraX
-        └── summary.csv                         ← ★ per protein × conformation
+        │       └── interaction.cxc        ← open in ChimeraX
+        └── summary.csv                    ← ★ final output per protein × conformation
 ```
 
 ---
 
 ## Key configuration options
 
-| Key                       | Description                                      |
-| --------------------------| -------------------------------------------------|
-| `boltz.accelerator`       | `"cpu"` (local Mac) or `"gpu"` (HPC)             |
-| `boltz.no_kernels`        | `true` for CPU/V100S, `false` for A100/H100      |
-| `boltz.diffusion_samples` | Number of structural samples per run (default 5) |
-| `boltz.ligand_smiles`     | SMILES of the transported substrate              |
-| `boltz.pocket_force`      | `true` = enforce pocket via steering potential   |
-| `templates.efflux`        | `true` to include MFS-MDR efflux pump templates  |
-| `plip.docker_platform`    | `"linux/amd64"` needed on Apple Silicon          |
-| `chimerax_bin`            | Full path to ChimeraX executable                 |
-
----
-
-## HPC / SLURM
-
-To run on a cluster, change in `config.yaml`:
-
-```yaml
-boltz:
-  accelerator: "gpu"
-  no_kernels: false    # if cluster has A100/H100
-```
-
-Then submit with the SLURM executor:
-
-```bash
-snakemake --executor slurm --cores 100 --use-conda \
-    --default-resources slurm_partition=gpu mem_mb=64000
-```
+| Key                       | Description                                       |
+|---------------------------|---------------------------------------------------|
+| `boltz.accelerator`       | `"cpu"`, `"mps"` (Apple Silicon), or `"gpu"` (HPC)|
+| `boltz.no_kernels`        | `true` for CPU/MPS/V100S, `false` for A100/H100   |
+| `boltz.diffusion_samples` | Number of structural samples per run (default 5)  |
+| `boltz.ligand_smiles`     | SMILES of the transported substrate               |
+| `boltz.pocket_force`      | `true` = enforce pocket via steering potential    |
+| `templates.efflux`        | `true` to include MFS-MDR efflux pump templates   |
+| `plip.docker_platform`    | `"linux/amd64"` needed on Apple Silicon           |
+| `chimerax_bin`            | Full path to ChimeraX executable (local override) |
 
 ---
 
 ## Resuming
 
 - All stages are resumable: existing output files are never rewritten.
-- To force-rerun a single stage, delete its sentinel or output and rerun.
-- To add a new conformation: add its entry under `templates.conformations`
-  in `config.yaml` and rerun — only the new conformation will be processed.
+- To force-rerun one stage, delete its sentinel or output file and rerun.
+- `submit_boltz2.sh` skips any job whose `prediction.done` already exists.
+- To add a new conformation: add it under `templates.conformations` in
+  `config.yaml` and rerun — only the new conformation will be processed.
 
 ---
 
 ## Troubleshooting
 
-| Symptom                          | Fix                                                                     |
-| -------------------------------- | ----------------------------------------------------------------------- |
-| `No cd174xx match` for a protein | Check InterProScan JSON manually; the protein may be unannotated in CDD |
-| `No .cif files` in templates dir | Check `data/templates.done`; rerun `download_templates` rule            |
-| ChimeraX segfault                | Verify `chimerax_bin` path; test with `chimerax --nogui --exit`         |
-| Docker permission error          | Ensure Docker is running; on Mac check Docker Desktop is open           |
-| Boltz-2 OOM on CPU               | Reduce `diffusion_samples` or `recycling_steps` in config.yaml          |
-| PLIP segfault (exit 139)         | Check PDB for broken backbone; `fix_pdb` step can be enabled if needed  |
+| Symptom                           | Fix                                                                      |
+|-----------------------------------|--------------------------------------------------------------------------|
+| `No cd174xx match` for a protein  | Check InterProScan JSON; protein may be unannotated in CDD               |
+| `No .cif files` in templates dir  | Check `data/templates/templates.done`; rerun `download_templates`        |
+| ChimeraX segfault                 | Verify `chimerax_bin` path; test with `chimerax --nogui --exit`          |
+| Docker permission error           | Ensure Docker Desktop is running                                         |
+| Boltz-2 OOM on CPU                | Reduce `diffusion_samples` or `recycling_steps` in `config.yaml`         |
+| PLIP segfault (exit 139)          | Check PDB backbone; enable `fix_pdb` step if needed                      |
+| Missing email error on startup    | Run `cp config.local.yaml.example config.local.yaml` and set your email  |
+| Post-processing finds no targets  | Check `data/msa/msa.done` exists and `results/boltz/` was transferred    |
