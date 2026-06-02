@@ -1,0 +1,301 @@
+"""
+Snakefile_postprocess — Stages 6–9
+====================================
+Run locally (Mac / workstation) after Boltz-2 has completed on the cluster.
+
+  6. ChimeraX   — energy minimization, CIF → PDB
+  7. PLIP        — protein–ligand interaction profiling via Docker
+  8. pliparser   — PLIP report → CSV + ChimeraX .cxc
+  9. Aggregate   — merge per-sample CSVs (one summary per protein × conformation)
+
+Prerequisites:
+  - Snakefile_preprocess completed (stages 1–4)
+  - submit_boltz2.sh completed (stage 5) — all prediction.done files exist
+  - Transfer results/boltz/ from cluster back to local machine
+
+Usage:
+  snakemake -s Snakefile_postprocess --cores 10 --use-conda
+"""
+
+import json
+from pathlib import Path
+
+configfile: "config.yaml"
+if Path("config.local.yaml").exists():
+    configfile: "config.local.yaml"
+
+# ── Directory shortcuts ────────────────────────────────────────────────────────
+DIRS         = config["dirs"]
+MSA_DIR      = Path(DIRS["msa"])
+BOLTZ_OUT    = Path(DIRS["boltz_out"])
+MIN_DIR      = Path(DIRS["minimized"])
+PLIP_DIR     = Path(DIRS["plip"])
+LOG_DIR      = Path(DIRS["logs"])
+
+PLIP_CFG     = config["plip"]
+VIZ_CFG      = config["visualization"]
+CHIMERAX_BIN = config["chimerax_bin"]
+CONFORMATIONS = list(config["templates"]["conformations"].keys())
+
+
+# ── Discover proteins and samples from Boltz-2 output on disk ─────────────────
+# No checkpoint needed: all CIFs already exist.
+
+def read_proteins(sentinel_path):
+    """Read protein names from the MSA sentinel file."""
+    p = Path(sentinel_path)
+    if p.exists():
+        return [line.strip() for line in p.read_text().splitlines() if line.strip()]
+    return []
+
+MSA_SENTINEL = MSA_DIR / "msa.done"
+PROTEINS = read_proteins(MSA_SENTINEL)
+
+if not PROTEINS:
+    raise ValueError(
+        f"\n Cannot read protein list from {MSA_SENTINEL}.\n"
+        " Run Snakefile_preprocess first.\n"
+    )
+
+
+def discover_cifs(protein, conformation):
+    """
+    Glob CIF files produced by Boltz-2 for one protein × conformation.
+    Returns a sorted list of Path objects.
+    """
+    pred_root = BOLTZ_OUT / protein / conformation / "boltz_out" / "predictions"
+    return sorted(pred_root.glob("**/*.cif")) if pred_root.exists() else []
+
+
+def discover_sample_ids(protein, conformation):
+    """Return list of sample_id strings (CIF stems) for one run."""
+    return [c.stem for c in discover_cifs(protein, conformation)]
+
+
+def cif_path_for_sample(protein, conformation, sample_id):
+    """Return the actual CIF path for a given sample_id."""
+    for c in discover_cifs(protein, conformation):
+        if c.stem == sample_id:
+            return str(c)
+    raise FileNotFoundError(
+        f"CIF not found for {protein}/{conformation}/{sample_id}. "
+        "Has Boltz-2 completed? Check prediction.done."
+    )
+
+
+# ── Build the complete target list upfront ────────────────────────────────────
+# Since all Boltz-2 outputs exist on disk, we can enumerate everything now.
+
+TARGETS = []     # final aggregate CSV per protein × conformation
+ALL_JOBS = {}    # (protein, conformation) → [sample_id, ...]
+
+for protein in PROTEINS:
+    for conformation in CONFORMATIONS:
+        done_file = BOLTZ_OUT / protein / conformation / "prediction.done"
+        if not done_file.exists():
+            continue   # skip proteins that haven't been predicted yet
+
+        sample_ids = discover_sample_ids(protein, conformation)
+        if not sample_ids:
+            print(f"[postprocess] WARNING: no CIFs for {protein}/{conformation} — skipping")
+            continue
+
+        ALL_JOBS[(protein, conformation)] = sample_ids
+        TARGETS.append(
+            str(PLIP_DIR / protein / conformation / "summary.csv")
+        )
+
+print(f"[postprocess] {len(ALL_JOBS)} protein × conformation combos, {len(TARGETS)} targets.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 6: ChimeraX minimization
+# ─────────────────────────────────────────────────────────────────────────────
+
+rule minimize_cif:
+    input:
+        cif = lambda wc: cif_path_for_sample(wc.protein, wc.conformation, wc.sample_id),
+    output:
+        pdb = str(MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"),
+    params:
+        chimerax = CHIMERAX_BIN,
+    log:
+        str(LOG_DIR / "minimize" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    shell:
+        """
+        mkdir -p $(dirname {output.pdb})
+        {params.chimerax} --nogui \\
+            --script "scripts/minimize_cif.py {input.cif} {output.pdb}" \\
+        > {log} 2>&1
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 7: PLIP via Docker
+# ─────────────────────────────────────────────────────────────────────────────
+
+rule run_plip:
+    input:
+        pdb = str(MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"),
+    output:
+        report = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "model_minimized_report.txt"
+        ),
+    params:
+        image         = PLIP_CFG["image"],
+        docker_memory = PLIP_CFG["docker_memory"],
+        platform_flag = (
+            f"--platform {PLIP_CFG['docker_platform']}"
+            if PLIP_CFG.get("docker_platform") else ""
+        ),
+        chains_flag   = (
+            f'--chains "[[\\"{PLIP_CFG["receptor_chain"]}\\","'
+            f'\\"{PLIP_CFG["ligand_chain"]}\\""]]"'
+        ),
+        report_dir    = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report"
+        ),
+    log:
+        str(LOG_DIR / "plip" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    shell:
+        """
+        mkdir -p {params.report_dir}
+        docker run --rm \\
+            --memory={params.docker_memory} \\
+            {params.platform_flag} \\
+            -v $(pwd):/work -w /work \\
+            {params.image} \\
+            -f {input.pdb} \\
+            -t \\
+            {params.chains_flag} \\
+            -o {params.report_dir} \\
+        > {log} 2>&1
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 8: pliparser — PLIP report → CSV + CXC
+# ─────────────────────────────────────────────────────────────────────────────
+
+rule plip_to_csv:
+    input:
+        report = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "model_minimized_report.txt"
+        ),
+    output:
+        summary = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "csv" / "summary.csv"
+        ),
+    params:
+        out_dir = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "csv"
+        ),
+    log:
+        str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_csv.log"),
+    conda:
+        "envs/pliparser.yaml"
+    shell:
+        """
+        mkdir -p {params.out_dir}
+        pliparser plip2csv \\
+            --input  {input.report} \\
+            --output {params.out_dir}/ \\
+        > {log} 2>&1
+        """
+
+
+rule csv_to_cxc:
+    input:
+        csv_dir = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "csv"
+        ),
+        pdb = str(
+            MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"
+        ),
+    output:
+        cxc    = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "interaction.cxc"
+        ),
+        config_json = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "cxc-config.json"
+        ),
+    params:
+        receptor_chain = PLIP_CFG["receptor_chain"],
+        ligand_chain   = PLIP_CFG["ligand_chain"],
+        transparency   = VIZ_CFG["transparency"],
+        receptor_color = VIZ_CFG["receptor_color"],
+        ligand_color   = VIZ_CFG["ligand_color"],
+    log:
+        str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_cxc.log"),
+    conda:
+        "envs/pliparser.yaml"
+    shell:
+        """
+        python scripts/make_cxc_config.py \\
+            --pdb             {input.pdb} \\
+            --output          {output.config_json} \\
+            --receptor-chain  {params.receptor_chain} \\
+            --ligand-chain    {params.ligand_chain} \\
+            --transparency    {params.transparency} \\
+            --receptor-color  {params.receptor_color} \\
+            --ligand-color    {params.ligand_color} \\
+        > {log} 2>&1
+
+        pliparser csv2cxc \\
+            --input  {input.csv_dir} \\
+            --output {output.cxc} \\
+            --config {output.config_json} \\
+        >> {log} 2>&1
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 9: Aggregate per protein × conformation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def summaries_for_protein_conformation(wildcards):
+    """Return all per-sample summary CSVs for one protein × conformation."""
+    sample_ids = ALL_JOBS.get((wildcards.protein, wildcards.conformation), [])
+    return [
+        str(
+            PLIP_DIR / wildcards.protein / wildcards.conformation
+            / sid / "model_minimized_report" / "csv" / "summary.csv"
+        )
+        for sid in sample_ids
+    ]
+
+
+rule aggregate_plip:
+    input:
+        csvs = summaries_for_protein_conformation,
+    output:
+        str(PLIP_DIR / "{protein}" / "{conformation}" / "summary.csv"),
+    log:
+        str(LOG_DIR / "aggregate" / "{protein}" / "{conformation}.log"),
+    conda:
+        "envs/aggregate.yaml"
+    shell:
+        """
+        python scripts/aggregate_plip_summary.py \\
+            --output {output} \\
+            {input.csvs} \\
+        > {log} 2>&1
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RULE ALL — postprocess targets
+# ─────────────────────────────────────────────────────────────────────────────
+
+rule all:
+    default_target: True
+    input:
+        TARGETS
