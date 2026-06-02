@@ -153,24 +153,47 @@ Transfer inputs to the cluster, submit Boltz-2 jobs, then transfer results back.
 
 ```bash
 # 1. Transfer inputs to cluster
-rsync -av data/boltz_inputs/ user@cluster:project/data/boltz_inputs/
-rsync -av data/msa/msa.done  user@cluster:project/data/msa/
+cd ../
+rsync -av \
+  --exclude='.snakemake/' \
+  --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' \
+  --exclude='.mypy_cache/' \
+  --exclude='.ruff_cache/' \
+  --exclude='.cache/' \
+  --exclude='.ipynb_checkpoints/' \
+  --exclude='*.pyc' \
+  --exclude='*.pyo' \
+  NPF_pocket_pipeline \
+  username@your_cluster:path/to/projects/
 
-# 2. On the cluster — dry-run first to check the plan
+# 2. Connect on your cluster
+ssh username@your_cluster
+cd path/to/projects
+
+# 3. On the cluster — dry-run first to check the plan
+#    The submission script accepts `--gres <gpu_profile>` to override the
+#    default GPU resource setting in `submit_boltz2.sh` (see top of script).
+#    Examples: `--gres gpu:3g.20gb:1` (MIG/A100 slice), `--gres gpu:7g.40gb:1` (A100 full).
 bash submit_boltz2.sh --dry-run
+# or dry-run with explicit GPU profile:
+bash submit_boltz2.sh --gres gpu:7g.40gb:1 --dry-run
 
-# 3. Submit all jobs
+# 4. Submit all jobs (optionally set GPU profile)
 bash submit_boltz2.sh
+# or submit with a specific GPU profile:
+bash submit_boltz2.sh --gres gpu:7g.40gb:1
 
-# 4. Monitor
+# 5. Monitor
 squeue -u $USER
 
-# 5. Transfer results back when complete
+# 6. Transfer results back when complete
 rsync -av user@cluster:project/results/boltz/ results/boltz/
 ```
 
 Edit the SLURM settings at the top of `submit_boltz2.sh` to match your cluster
-(partition, GPU type, account, etc.).
+(partition, GPU type, account, etc.). You can also override the default `--gres`
+value at runtime using the `--gres` argument shown above.
 
 ### Part 3 — Post-processing (local)
 

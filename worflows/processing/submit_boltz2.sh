@@ -13,8 +13,12 @@
 #   - Run this script from the pipeline root directory
 #
 # Usage:
-#   bash submit_boltz2.sh                 # submit all pending jobs
-#   bash submit_boltz2.sh --dry-run       # show plan without submitting
+#   bash submit_boltz2.sh                             # submit all pending jobs
+#   bash submit_boltz2.sh --dry-run                   # show plan without submitting
+#   bash submit_boltz2.sh --gres gpu:3g.20gb:1        # IFB A100 20GB MIG slice
+#   bash submit_boltz2.sh --gres gpu:7g.40gb:1        # IFB A100 full 40GB card
+#   bash submit_boltz2.sh --gres gpu:tesla:1          # old cluster (V100S)
+#   bash submit_boltz2.sh --gres gpu:tesla:1 --dry-run  # combine flags freely
 #
 # The script is idempotent: jobs with prediction.done are skipped.
 # =============================================================================
@@ -37,15 +41,36 @@ OUTPUT_FORMAT="mmcif"
 PARTITION="gpu"
 CPUS=8
 MEM="64G"
-GRES="gpu:tesla:1"
-TIME=240   # minutes per job
+GRES="gpu:3g.20gb:1"   # default — override with --gres <profile> on the command line
+TIME=240   # minutes per job (4 hours)
+             # GPU (V100S): ~8 min/job → 4h is very generous, reduce if queue is busy
+             # GPU (A100):  ~3 min/job → could use TIME=30
 ACCOUNT=""  # set if your cluster requires --account
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 DRY_RUN=false
-if [[ "${1:-}" == "--dry-run" ]] || [[ "${1:-}" == "-n" ]]; then
-    DRY_RUN=true
-fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run|-n)
+            DRY_RUN=true
+            shift
+            ;;
+        --gres)
+            GRES="$2"
+            shift 2
+            ;;
+        --gres=*)
+            GRES="${1#--gres=}"
+            shift
+            ;;
+        *)
+            echo "ERROR: unknown argument '$1'"
+            echo "Usage: bash submit_boltz2.sh [--dry-run] [--gres <gpu_profile>]"
+            exit 1
+            ;;
+    esac
+done
 
 # ── Validate prerequisites ────────────────────────────────────────────────────
 SENTINEL="data/msa/msa.done"
@@ -59,13 +84,6 @@ fi
 if [[ ! -d "$BOLTZ_INPUTS" ]]; then
     echo "ERROR: $BOLTZ_INPUTS not found."
     echo "       Run Snakefile_preprocess first."
-    exit 1
-fi
-
-# Detect conda base for activation on compute nodes
-CONDA_BASE=$(conda info --base 2>/dev/null)
-if [[ -z "$CONDA_BASE" ]]; then
-    echo "ERROR: conda not found. Load your conda module first."
     exit 1
 fi
 
@@ -105,14 +123,14 @@ for YAML in "$BOLTZ_INPUTS"/*/*/target.yaml; do
 
     # Skip completed
     if [[ -f "$DONE_FILE" ]]; then
-        ((skipped++))
+        skipped=$((skipped + 1))
         continue
     fi
 
     echo "[PENDING] $PROTEIN / $CONF"
 
     if $DRY_RUN; then
-        ((submitted++))
+        submitted=$((submitted + 1))
         continue
     fi
 
@@ -127,7 +145,7 @@ for YAML in "$BOLTZ_INPUTS"/*/*/target.yaml; do
         --gres="$GRES" \
         --time="$TIME" \
         $ACCOUNT_FLAG \
-        --job-name="boltz2_${PROTEIN}_${CONF}" \
+        --job-name="b2_${PROTEIN:0:6}_${CONF:0:6}" \
         --output="$LOG_DIR/boltz2.log" \
         --error="$LOG_DIR/boltz2.err" \
         << SLURM_SCRIPT
@@ -139,11 +157,9 @@ echo "  YAML:    $YAML"
 echo "  Out dir: $OUT_DIR"
 echo "  Samples: $DIFFUSION_SAMPLES"
 
-# Activate conda env on compute node
-set +u
-source "$CONDA_BASE/etc/profile.d/conda.sh"
-conda activate "$CONDA_ENV"
-set -u
+# Activate conda env on IFB (uses module system, not conda base path)
+module load conda
+source activate "$CONDA_ENV"
 
 echo "[\$(date)] Python: \$(which python)"
 echo "[\$(date)] CUDA:   \$(python -c 'import torch; print(torch.cuda.is_available())')"
@@ -155,14 +171,14 @@ boltz predict \\
     --recycling_steps $RECYCLING_STEPS \\
     --diffusion_samples $DIFFUSION_SAMPLES \\
     --output_format $OUTPUT_FORMAT \\
-    --no_kernels
+    # --no_kernels   # remove this comment for V100S/CPU; A100 does NOT need this
 
 echo "\$(date): prediction finished" > "$DONE_FILE"
 echo "[\$(date)] Done."
 SLURM_SCRIPT
 
     echo "  → submitted"
-    ((submitted++))
+    submitted=$((submitted + 1))
 
 done
 
