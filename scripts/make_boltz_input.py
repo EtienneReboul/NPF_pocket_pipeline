@@ -26,10 +26,11 @@ Usage (called by Snakemake rule `prepare_boltz_input`):
 
 import argparse
 import json
+import os
 from pathlib import Path
 
-import yaml
-from Bio import SeqIO
+import yaml # pyright: ignore[reportMissingModuleSource]
+from Bio import SeqIO # pyright: ignore[reportMissingImports]
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -92,12 +93,17 @@ def load_residues_from_summary(summary_path: Path, protein_name: str) -> list[in
     return data[protein_name].get("residues", [])
 
 
-def collect_template_paths(templates_dir: Path) -> list[str]:
-    """Return sorted list of absolute CIF paths in the template directory."""
+def collect_template_paths(templates_dir: Path, output_path: Path) -> list[str]:
+    """
+    Return CIF paths relative to the output YAML's directory.
+    Relative paths make the target.yaml portable across machines
+    (cluster, local Mac, etc.) as long as the project root is the same.
+    """
     cifs = sorted(templates_dir.glob("*.cif"))
     if not cifs:
         raise RuntimeError(f"No .cif files found in templates directory: {templates_dir}")
-    return [str(p.resolve()) for p in cifs]
+    yaml_dir = output_path.parent
+    return [str(Path(os.path.relpath(p.resolve(), yaml_dir.resolve()))) for p in cifs]
 
 
 # ── YAML construction ──────────────────────────────────────────────────────────
@@ -142,7 +148,10 @@ def build_yaml(
     protein_entry: dict = {
         "id":       protein_entity_id,
         "sequence": sequence,
-        "msa":      str(a3m_path.resolve()),
+        "msa":      str(Path(os.path.relpath(
+                        a3m_path.resolve(),
+                        output_path.parent.resolve() # pyright: ignore[reportUndefinedVariable]  # noqa: F821
+                    ))),
     }
     doc["sequences"] = [{"protein": protein_entry}]
 
@@ -192,7 +201,7 @@ def main():
 
     sequence         = load_sequence(fasta_path)
     binding_residues = load_residues_from_summary(summary_path, args.protein_name)
-    template_paths   = collect_template_paths(templates_dir)
+    template_paths   = collect_template_paths(templates_dir, output_path)
 
     doc = build_yaml(
         sequence          = sequence,
