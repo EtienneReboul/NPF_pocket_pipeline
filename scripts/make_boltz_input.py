@@ -26,7 +26,6 @@ Usage (called by Snakemake rule `prepare_boltz_input`):
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 import yaml # pyright: ignore[reportMissingModuleSource]
@@ -95,15 +94,16 @@ def load_residues_from_summary(summary_path: Path, protein_name: str) -> list[in
 
 def collect_template_paths(templates_dir: Path, output_path: Path) -> list[str]:
     """
-    Return CIF paths relative to the output YAML's directory.
-    Relative paths make the target.yaml portable across machines
-    (cluster, local Mac, etc.) as long as the project root is the same.
+    Return CIF paths relative to the project root (cwd).
+    Using cwd-relative paths makes target.yaml portable across machines
+    as long as boltz predict is always run from the project root — which
+    is what the SLURM script and Snakemake both do.
     """
     cifs = sorted(templates_dir.glob("*.cif"))
     if not cifs:
         raise RuntimeError(f"No .cif files found in templates directory: {templates_dir}")
-    yaml_dir = output_path.parent
-    return [str(Path(os.path.relpath(p.resolve(), yaml_dir.resolve()))) for p in cifs]
+    cwd = Path.cwd()
+    return [str(p.resolve().relative_to(cwd)) for p in cifs]
 
 
 # ── YAML construction ──────────────────────────────────────────────────────────
@@ -148,10 +148,7 @@ def build_yaml(
     protein_entry: dict = {
         "id":       protein_entity_id,
         "sequence": sequence,
-        "msa":      str(Path(os.path.relpath(
-                        a3m_path.resolve(),
-                        output_path.parent.resolve() # pyright: ignore[reportUndefinedVariable]  # noqa: F821
-                    ))),
+        "msa":      str(a3m_path.resolve().relative_to(Path.cwd())),
     }
     doc["sequences"] = [{"protein": protein_entry}]
 
