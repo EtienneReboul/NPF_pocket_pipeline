@@ -140,7 +140,6 @@ rule run_interproscan:
         msa_done = str(MSA_SENTINEL),   # ensures FASTA is ready
     output:
         sentinel = str(IPRO_SENTINEL),
-        json     = str(INTERPRO_DIR / "interproscan_cdd.json"),
         summary  = str(INTERPRO_DIR / "cdd_summary.json"),
     params:
         out_dir      = str(INTERPRO_DIR),
@@ -238,6 +237,8 @@ rule run_boltz2:
         extra_flags      = BOLTZ_CFG.get("extra_flags", ""),
     log:
         str(LOG_DIR / "boltz_run" / "{protein}" / "{conformation}.log"),
+    conda:
+        "envs/boltz2.yaml"
     shell:
         """
         boltz predict \\

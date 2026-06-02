@@ -73,7 +73,7 @@ boltz:
   pocket_max_distance: 6.0         # Angstroms (4–20 supported)
   pocket_force: true               # apply steering potential to enforce constraint
   # Accelerator: "cpu" for local Mac, "gpu" for HPC
-  accelerator: "cpu"
+  accelerator: "gpu"    # was "cpu"
   extra_flags: ""
 
 # ── Stage 5: ChimeraX minimization ───────────────────────────────────────────
