@@ -1,10 +1,12 @@
 name: boltz2
-# Boltz-2 compute environment — CPU-first (local Mac M4 Max).
-# For HPC with SLURM + GPU, swap accelerator in config.yaml and
-# replace the pytorch entry with pytorch::pytorch=2.4.* + pytorch-cuda=12.4.
+# Boltz-2 compute environment.
 #
-# Note: no_kernels: true in config.yaml disables triton/cuEquivariance,
-# which is required for CPU mode AND sm_70 (V100S) GPUs.
+# cuequivariance packages (PyPI only, not on conda-forge) enable triangular
+# multiplication kernels on CUDA GPUs (A100, L40S, H100). They are optional:
+# if absent, run boltz with --no_kernels (slower but correct).
+#
+# cu12 suffix targets CUDA 12.x — change to cu11 if cluster runs CUDA 11.x.
+# Check with: python -c "import torch; print(torch.version.cuda)"
 channels:
   - conda-forge
   - nodefaults
@@ -15,3 +17,5 @@ dependencies:
       - boltz
       - "numpy>=1.26,<2.0"
       - pyyaml>=6.0
+      - cuequivariance-torch            # optional GPU kernel acceleration
+      - cuequivariance-ops-torch-cu12   # change cu12→cu11 for CUDA 11.x
