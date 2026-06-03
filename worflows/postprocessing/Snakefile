@@ -37,6 +37,11 @@ VIZ_CFG      = config["visualization"]
 CHIMERAX_BIN = config["chimerax_bin"]
 CONFORMATIONS = list(config["templates"]["conformations"].keys())
 
+wildcard_constraints:
+    protein      = r"[^/]+",
+    conformation = r"[^/]+",
+    sample_id    = r"[^/]+",
+
 
 # ── Discover proteins and samples from Boltz-2 output on disk ─────────────────
 # No checkpoint needed: all CIFs already exist.
@@ -61,10 +66,13 @@ if not PROTEINS:
 def discover_cifs(protein, conformation):
     """
     Glob CIF files produced by Boltz-2 for one protein × conformation.
+    Boltz-2 nests predictions under a content-hashed subdirectory, e.g.
+      boltz_out/boltz_results_target/predictions/target/target_model_0.cif
+    so we glob from boltz_out/ with a recursive pattern.
     Returns a sorted list of Path objects.
     """
-    pred_root = BOLTZ_OUT / protein / conformation / "boltz_out" / "predictions"
-    return sorted(pred_root.glob("**/*.cif")) if pred_root.exists() else []
+    boltz_root = BOLTZ_OUT / protein / conformation / "boltz_out"
+    return sorted(boltz_root.glob("**/predictions/**/*.cif")) if boltz_root.exists() else []
 
 
 def discover_sample_ids(protein, conformation):
@@ -149,10 +157,9 @@ rule run_plip:
             f"--platform {PLIP_CFG['docker_platform']}"
             if PLIP_CFG.get("docker_platform") else ""
         ),
-        chains_flag   = (
-            f'--chains "[[\\"{PLIP_CFG["receptor_chain"]}\\","'
-            f'\\"{PLIP_CFG["ligand_chain"]}\\""]]"'
-        ),
+        # apo  → intra-chain profiling (no ligand present)
+        # holo → auto-detect ligand interactions (no --chains needed)
+        plip_mode     = lambda wc: "--intra A" if "_apo" in wc.conformation else "",
         report_dir    = str(
             PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
             / "model_minimized_report"
@@ -169,7 +176,7 @@ rule run_plip:
             {params.image} \\
             -f {input.pdb} \\
             -t \\
-            {params.chains_flag} \\
+            {params.plip_mode} \\
             -o {params.report_dir} \\
         > {log} 2>&1
         """
@@ -198,7 +205,7 @@ rule plip_to_csv:
     log:
         str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_csv.log"),
     conda:
-        "envs/pliparser.yaml"
+        "../../envs/pliparser.yaml"
     shell:
         """
         mkdir -p {params.out_dir}
@@ -236,7 +243,7 @@ rule csv_to_cxc:
     log:
         str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_cxc.log"),
     conda:
-        "envs/pliparser.yaml"
+        "../../envs/pliparser.yaml"
     shell:
         """
         python scripts/make_cxc_config.py \\
@@ -281,7 +288,7 @@ rule aggregate_plip:
     log:
         str(LOG_DIR / "aggregate" / "{protein}" / "{conformation}.log"),
     conda:
-        "envs/aggregate.yaml"
+        "../../envs/aggregate.yaml"
     shell:
         """
         python scripts/aggregate_plip_summary.py \\
