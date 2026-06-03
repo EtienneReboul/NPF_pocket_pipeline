@@ -225,9 +225,9 @@ rule plip_to_csv:
 
 rule csv_to_cxc:
     input:
-        csv_dir = str(
+        csv_summary = str(
             PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "csv"
+            / "model_minimized_report" / "csv" / "summary.csv"
         ),
         pdb = str(
             MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"
@@ -242,6 +242,10 @@ rule csv_to_cxc:
             / "model_minimized_report" / "cxc-config.json"
         ),
     params:
+        csv_dir        = str(
+            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+            / "model_minimized_report" / "csv"
+        ),
         receptor_chain = "A",
         ligand_chain   = "A",               # ligand is a small molecule within chain A
         transparency   = VIZ_CFG["transparency"],
@@ -268,7 +272,7 @@ rule csv_to_cxc:
         > {log} 2>&1
 
         pliparser csv2cxc \\
-            --input  {input.csv_dir} \\
+            --input  {params.csv_dir} \\
             --output {output.cxc} \\
             --config {output.config_json} \\
         >> {log} 2>&1
