@@ -37,9 +37,9 @@ import time
 import zipfile
 from pathlib import Path
 
-import requests
-from Bio import SeqIO
-from tqdm import tqdm
+import requests # pyright: ignore[reportMissingModuleSource]
+from Bio import SeqIO # pyright: ignore[reportMissingImports]
+from tqdm import tqdm # pyright: ignore[reportMissingModuleSource]
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -116,19 +116,42 @@ def base_name(record) -> str:
 
 # ── ColabFold MSA API ──────────────────────────────────────────────────────────
 
-def submit_ticket(fasta_str: str) -> str:
-    r = requests.post(
-        "https://api.colabfold.com/ticket/msa",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={"q": fasta_str, "mode": "all"},
-        timeout=60,
-    )
-    if r.status_code != 200:
+def submit_ticket(fasta_str: str, max_retries: int = 10) -> str:
+    """
+    Submit a sequence to ColabFold MSA API with built-in rate-limit handling.
+    On 429 (RATELIMIT), backs off exponentially: 30s, 60s, 120s, ...
+    This is separate from the outer retry loop which handles other failures.
+    """
+    for attempt in range(max_retries):
+        r = requests.post(
+            "https://api.colabfold.com/ticket/msa",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={"q": fasta_str, "mode": "all"},
+            timeout=60,
+        )
+        if r.status_code == 200:
+            result = r.json()
+            if "id" not in result:
+                raise RuntimeError(f"No ticket ID in response: {result}")
+            return result["id"]
+
+        if r.status_code == 429:
+            backoff = min(30 * (2 ** attempt), 600)   # 30s, 60s, 120s, ... max 10min
+            print(
+                f"    [rate-limited] attempt {attempt + 1}/{max_retries} — "
+                f"waiting {backoff}s before retry ...",
+                flush=True,
+            )
+            time.sleep(backoff)
+            continue
+
+        # Any other HTTP error is fatal
         raise RuntimeError(f"Ticket submission failed ({r.status_code}): {r.text}")
-    result = r.json()
-    if "id" not in result:
-        raise RuntimeError(f"No ticket ID in response: {result}")
-    return result["id"]
+
+    raise RuntimeError(
+        f"Rate-limited {max_retries} times in a row. "
+        "The ColabFold server may be overloaded — try again later."
+    )
 
 
 def poll_ticket(ticket_id: str, poll_interval: int, timeout: int) -> bytes:
@@ -168,7 +191,7 @@ def save_outputs(raw: bytes, name: str, a3m_dir: Path, pdb_dir: Path, sh_dir: Pa
                 f = tf.extractfile(member)
                 if f is None:
                     continue
-                content = f.read().decode("utf-8")
+                content = f.read().decode("utf-8").replace("\x00", "")
                 if member.name.endswith(".a3m"):
                     (a3m_dir / f"{name}.a3m").write_text(content)
                 elif member.name.endswith(".m8"):
@@ -182,16 +205,16 @@ def save_outputs(raw: bytes, name: str, a3m_dir: Path, pdb_dir: Path, sh_dir: Pa
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
             a3m_names = [n for n in zf.namelist() if n.endswith(".a3m")]
             target = a3m_names[0] if a3m_names else zf.namelist()[0]
-            (a3m_dir / f"{name}.a3m").write_text(zf.open(target).read().decode("utf-8"))
+            (a3m_dir / f"{name}.a3m").write_text(zf.open(target).read().decode("utf-8").replace("\x00", ""))
         return
 
     # GZIP
     if raw[:2] == b"\x1f\x8b":
-        (a3m_dir / f"{name}.a3m").write_text(gzip.decompress(raw).decode("utf-8"))
+        (a3m_dir / f"{name}.a3m").write_text(gzip.decompress(raw).decode("utf-8").replace("\x00", ""))
         return
 
     # Plain text fallback
-    (a3m_dir / f"{name}.a3m").write_text(raw.decode("utf-8"))
+    (a3m_dir / f"{name}.a3m").write_text(raw.decode("utf-8").replace("\x00", ""))
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -229,6 +252,8 @@ def main():
             per_fasta.write_text(f"{header}\n{record.seq}\n")
 
     # Step 4 — ColabFold MSA (resumable)
+    # Rate-limit handling is built into submit_ticket() (exponential backoff on 429).
+    # The outer retry loop handles network errors, timeouts, and other transient failures.
     for record in tqdm(records, desc="ColabFold MSA"):
         name = base_name(record)
         a3m_path = a3m_dir / f"{name}.a3m"
@@ -250,7 +275,12 @@ def main():
             except Exception as e:
                 print(f"\n[msa] {name} attempt {attempt + 1}/{args.retries}: {e}")
                 if attempt < args.retries - 1:
-                    time.sleep(15)
+                    wait = 30 * (attempt + 1)   # 30s, 60s between outer retries
+                    print(f"    waiting {wait}s before retry ...", flush=True)
+                    time.sleep(wait)
+        else:
+            # All retries exhausted — skip this protein, don't crash
+            print(f"\n[msa] WARNING: {name} failed after {args.retries} attempts — skipping")
 
         time.sleep(args.delay)
 
