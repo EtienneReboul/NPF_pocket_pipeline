@@ -94,7 +94,7 @@ def cif_path_for_sample(protein, conformation, sample_id):
 # ── Build the complete target list upfront ────────────────────────────────────
 # Since all Boltz-2 outputs exist on disk, we can enumerate everything now.
 
-TARGETS = []     # final aggregate CSV per protein × conformation
+TARGETS = []     # final aggregate CSV + per-sample CXC scripts
 ALL_JOBS = {}    # (protein, conformation) → [sample_id, ...]
 
 for protein in PROTEINS:
@@ -109,9 +109,16 @@ for protein in PROTEINS:
             continue
 
         ALL_JOBS[(protein, conformation)] = sample_ids
+        # aggregate CSV (one per protein × conformation)
         TARGETS.append(
             str(PLIP_DIR / protein / conformation / "summary.csv")
         )
+        # ChimeraX visualization scripts (one per sample)
+        for sid in sample_ids:
+            TARGETS.append(
+                str(PLIP_DIR / protein / conformation / sid
+                    / "model_minimized_report" / "interaction.cxc")
+            )
 
 print(f"[postprocess] {len(ALL_JOBS)} protein × conformation combos, {len(TARGETS)} targets.")
 
@@ -235,11 +242,14 @@ rule csv_to_cxc:
             / "model_minimized_report" / "cxc-config.json"
         ),
     params:
-        receptor_chain = PLIP_CFG["receptor_chain"],
-        ligand_chain   = PLIP_CFG["ligand_chain"],
+        receptor_chain = "A",
+        ligand_chain   = "A",               # ligand is a small molecule within chain A
         transparency   = VIZ_CFG["transparency"],
         receptor_color = VIZ_CFG["receptor_color"],
         ligand_color   = VIZ_CFG["ligand_color"],
+        # holo → --issmalmol (nitrate is a small molecule in chain A)
+        # apo  → no flag (intra-chain profiling, no small molecule)
+        issmalmol_flag = lambda wc: "--issmalmol" if "_holo" in wc.conformation else "",
     log:
         str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_cxc.log"),
     conda:
@@ -254,6 +264,7 @@ rule csv_to_cxc:
             --transparency    {params.transparency} \\
             --receptor-color  {params.receptor_color} \\
             --ligand-color    {params.ligand_color} \\
+            {params.issmalmol_flag} \\
         > {log} 2>&1
 
         pliparser csv2cxc \\
