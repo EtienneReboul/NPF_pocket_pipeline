@@ -25,8 +25,10 @@ import argparse
 import tempfile
 from pathlib import Path
 
+# conda env is made by snakemake, so we can assume these are available at runtime (but static analysis may not detect them)
 import gemmi # pyright: ignore[reportMissingImports]
 from rdkit import Chem # pyright: ignore[reportMissingImports]
+from rdkit.Chem import AllChem # pyright: ignore[reportMissingImports]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,16 +79,20 @@ def split_pdb(full_pdb: str, protein_pdb: str, ligand_pdb: str) -> bool:
 
 def sanitize_ligand(ligand_pdb_path: str) -> str:
     """
-    Load ligand PDB with RDKit, sanitize, return PDB block with CONECT
-    records.
+    Load ligand PDB with RDKit, sanitize and minimize geometry.
 
-    Following the TeachOpenCADD T009 normalisation approach:
-      - Bond perception from 3D coordinates (proximityBonding)
-      - Full sanitization (valence, aromaticity, hybridisation)
-      - Stereochemistry assignment from 3D
+    Workflow (following TeachOpenCADD T009 normalisation + geometry fix):
+      1. Bond perception from 3D coordinates (proximityBonding)
+      2. Full sanitization (valence, aromaticity, hybridisation)
+      3. Add hydrogens with 3D coordinates
+      4. MMFF94 force-field minimization to correct geometry
+         (fixes bond lengths, angles, torsions that Boltz-2 may predict
+         incorrectly when hydrogens are absent)
+      5. Remove hydrogens (ChimeraX dock prep will re-add them)
+      6. Stereochemistry assignment from corrected 3D
 
-    The CONECT records in the output tell ChimeraX the correct bond
-    topology, preventing IDATM atom-type misassignment.
+    Returns a PDB block with CONECT records so ChimeraX assigns correct
+    IDATM atom types.
     """
     mol = Chem.MolFromPDBFile(
         str(ligand_pdb_path),
@@ -115,7 +121,50 @@ def sanitize_ligand(ligand_pdb_path: str) -> str:
     except Exception as e:
         print(f"[sanitize] WARNING: Sanitization failed ({e}), writing as-is with CONECT")
 
-    # ── Stereochemistry from 3D ───────────────────────────────────────────
+    # ── Add hydrogens with 3D coordinates ─────────────────────────────────
+    try:
+        mol = Chem.AddHs(mol, addCoords=True)
+        print(f"[sanitize] Added hydrogens ({mol.GetNumAtoms()} atoms total)")
+    except Exception as e:
+        print(f"[sanitize] WARNING: Could not add hydrogens ({e})")
+
+    # ── Minimize geometry with MMFF94 ─────────────────────────────────────
+    # Corrects bond lengths, angles, and torsions predicted without H atoms.
+    # The ligand is minimized in isolation — overall binding pose is preserved,
+    # only local geometry is corrected.
+    try:
+        ff_props = AllChem.MMFFGetMoleculeProperties(mol)
+        if ff_props is not None:
+            ff = AllChem.MMFFGetMoleculeForceField(mol, ff_props)
+            if ff is not None:
+                ret = ff.Minimize(maxIts=500)
+                energy = ff.CalcEnergy()
+                status = "converged" if ret == 0 else "not converged"
+                print(f"[sanitize] MMFF94 minimization {status} (energy={energy:.1f} kcal/mol)")
+            else:
+                raise RuntimeError("MMFF force field setup failed")
+        else:
+            raise RuntimeError("MMFF properties could not be computed")
+    except Exception as e:
+        print(f"[sanitize] WARNING: MMFF94 failed ({e}), trying UFF")
+        try:
+            ff = AllChem.UFFGetMoleculeForceField(mol)
+            if ff is not None:
+                ret = ff.Minimize(maxIts=500)
+                energy = ff.CalcEnergy()
+                status = "converged" if ret == 0 else "not converged"
+                print(f"[sanitize] UFF minimization {status} (energy={energy:.1f})")
+            else:
+                print("[sanitize] WARNING: UFF also failed, using unminimized geometry")
+        except Exception as e2:
+            print(f"[sanitize] WARNING: UFF also failed ({e2}), using unminimized geometry")
+
+    # ── Remove hydrogens ──────────────────────────────────────────────────
+    # ChimeraX dock prep re-adds them; keeping them would cause duplicates.
+    # Heavy atom positions are now corrected by the minimization above.
+    mol = Chem.RemoveHs(mol)
+
+    # ── Stereochemistry from corrected 3D ─────────────────────────────────
     try:
         Chem.AssignStereochemistryFrom3D(mol)
     except Exception:
