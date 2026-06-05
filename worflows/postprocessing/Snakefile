@@ -28,6 +28,7 @@ if Path("config.local.yaml").exists():
 DIRS         = config["dirs"]
 MSA_DIR      = Path(DIRS["msa"])
 BOLTZ_OUT    = Path(DIRS["boltz_out"])
+SANITIZED_DIR = Path(DIRS.get("sanitized", "results/sanitized"))
 MIN_DIR      = Path(DIRS["minimized"])
 PLIP_DIR     = Path(DIRS["plip"])
 LOG_DIR      = Path(DIRS["logs"])
@@ -124,12 +125,34 @@ print(f"[postprocess] {len(ALL_JOBS)} protein × conformation combos, {len(TARGE
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 6: ChimeraX minimization
+# STAGE 6a: Sanitize CIF — split protein/ligand, normalize ligand with RDKit
+# ─────────────────────────────────────────────────────────────────────────────
+
+rule sanitize_cif:
+    input:
+        cif = lambda wc: cif_path_for_sample(wc.protein, wc.conformation, wc.sample_id),
+    output:
+        pdb = str(SANITIZED_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_sanitized.pdb"),
+    log:
+        str(LOG_DIR / "sanitize" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    conda:
+        "../../envs/sanitize.yaml"
+    shell:
+        """
+        python scripts/sanitize_cif.py \\
+            --input  {input.cif} \\
+            --output {output.pdb} \\
+        > {log} 2>&1
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 6b: ChimeraX minimization (on sanitized PDB)
 # ─────────────────────────────────────────────────────────────────────────────
 
 rule minimize_cif:
     input:
-        cif = lambda wc: cif_path_for_sample(wc.protein, wc.conformation, wc.sample_id),
+        pdb = str(SANITIZED_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_sanitized.pdb"),
     output:
         pdb = str(MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"),
     params:
@@ -140,7 +163,7 @@ rule minimize_cif:
         """
         mkdir -p $(dirname {output.pdb})
         {params.chimerax} --nogui \\
-            --script "scripts/minimize_cif.py {input.cif} {output.pdb}" \\
+            --script "scripts/minimize_cif.py {input.pdb} {output.pdb}" \\
         > {log} 2>&1
         """
 
