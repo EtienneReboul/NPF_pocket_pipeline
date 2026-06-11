@@ -25,10 +25,10 @@ import argparse
 import tempfile
 from pathlib import Path
 
-# conda env is made by snakemake, so we can assume these are available at runtime (but static analysis may not detect them)
 import gemmi # pyright: ignore[reportMissingImports]
 from rdkit import Chem # pyright: ignore[reportMissingImports]
 from rdkit.Chem import AllChem # pyright: ignore[reportMissingImports]
+from rdkit.Chem import RWMol, GetPeriodicTable # pyright: ignore[reportMissingImports]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,12 +77,66 @@ def split_pdb(full_pdb: str, protein_pdb: str, ligand_pdb: str) -> bool:
 
 # ── Step 2: Normalize ligand with RDKit ───────────────────────────────────────
 
+def fix_overvalent_atoms(mol):
+    """
+    Remove spurious bonds created by proximityBonding.
+
+    When RDKit perceives bonds from 3D distances, atoms may end up with more
+    bonds than their element permits (e.g. O with 3 single bonds).  For each
+    over-valent atom the longest bond is removed — it is almost always the
+    spurious one because real bonds are shorter than accidental close contacts.
+    """
+    
+
+    pt   = GetPeriodicTable()
+    emol = RWMol(mol)
+    conf = emol.GetConformer()
+
+    for _ in range(50):                              # safety ceiling
+        problem = False
+        for atom in emol.GetAtoms():
+            total_v = int(sum(b.GetBondTypeAsDouble() for b in atom.GetBonds()))
+            allowed = pt.GetDefaultValence(atom.GetAtomicNum())
+            max_v   = max(allowed) if isinstance(allowed, (tuple, list)) else allowed
+
+            if total_v <= max_v:
+                continue
+
+            # Collect bonds with distances
+            pos_i = conf.GetAtomPosition(atom.GetIdx())
+            bonds_by_dist = []
+            for bond in atom.GetBonds():
+                other_idx = bond.GetOtherAtomIdx(atom.GetIdx())
+                pos_j = conf.GetAtomPosition(other_idx)
+                dist  = pos_i.Distance(pos_j)
+                bonds_by_dist.append((bond.GetBeginAtomIdx(),
+                                      bond.GetEndAtomIdx(), dist))
+
+            bonds_by_dist.sort(key=lambda x: -x[2])          # longest first
+            begin, end, dist = bonds_by_dist[0]
+            other     = end if begin == atom.GetIdx() else begin
+            other_sym = emol.GetAtomWithIdx(other).GetSymbol()
+
+            emol.RemoveBond(begin, end)
+            print(f"[sanitize] Removed spurious bond "
+                  f"{atom.GetSymbol()}{atom.GetIdx()}–{other_sym}{other} "
+                  f"(d={dist:.2f} Å, valence was {total_v}/{max_v})")
+            problem = True
+            break                                       # restart scan
+
+        if not problem:
+            break
+
+    return emol.GetMol()
+
+
 def sanitize_ligand(ligand_pdb_path: str) -> str:
     """
     Load ligand PDB with RDKit, sanitize and minimize geometry.
 
     Workflow (following TeachOpenCADD T009 normalisation + geometry fix):
       1. Bond perception from 3D coordinates (proximityBonding)
+      1b. Remove spurious bonds that cause over-valence
       2. Full sanitization (valence, aromaticity, hybridisation)
       3. Add hydrogens with 3D coordinates
       4. MMFF94 force-field minimization to correct geometry
@@ -102,6 +156,9 @@ def sanitize_ligand(ligand_pdb_path: str) -> str:
     )
     if mol is None:
         raise ValueError(f"RDKit could not parse {ligand_pdb_path}")
+
+    # ── Fix spurious proximity bonds ──────────────────────────────────────
+    mol = fix_overvalent_atoms(mol)
 
     # ── Sanitize ──────────────────────────────────────────────────────────
     try:
