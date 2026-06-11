@@ -94,6 +94,22 @@ visualization:
   receptor_color: "gray"
   ligand_color: "green"
 
+# ── Stage 10: TM helix annotation (Phobius + TMHMM via InterProScan REST) ────
+# Identifies which residue ranges correspond to TM1–TM12 in each NPF sequence.
+# TM2 (index 1) and TM8 (index 7) are used as the conformational angle metric.
+# Reference: Qureshi et al. (2020) Nature https://doi.org/10.1038/s41586-020-1963-z
+tm_annotation:
+  email: "your@email.com"          # required by EBI REST API
+  poll_interval: 30
+  poll_timeout: 3600
+
+# ── Stage 11–12: TM2/TM8 angle + GMM conformation classification ─────────────
+tm_angle:
+  min_helix_frac: 0.5              # min fraction of TM region helical in DSSP sanity check
+
+gmm:
+  n_init: 20                       # GMM restarts for robust convergence
+
 # ── Output directories ────────────────────────────────────────────────────────
 dirs:
   fasta:      "data/sequences"            # UniProt FASTA + per-protein FASTA
@@ -104,4 +120,7 @@ dirs:
   boltz_out:  "results/boltz"             # Boltz-2 mmCIF outputs
   minimized:  "results/minimized"         # ChimeraX PDB outputs
   plip:       "results/plip"              # PLIP reports + CSVs + CXC scripts
+  dssp:       "results/dssp"              # ChimeraX DSSP JSON per sample
+  tm_angles:  "results/tm_angles"         # TM2/TM8 angle CSVs per sample + conformation
+  gmm:        "results/gmm"               # GMM report, plots, BIC comparison
   logs:       "logs"

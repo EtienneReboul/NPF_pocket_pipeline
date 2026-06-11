@@ -1,0 +1,16 @@
+name: tm-analysis
+# Conformational angle analysis environment.
+# Used by:
+#   - scripts/compute_tm_angle.py   (TM2/TM8 angle from Boltz-2 CIF)
+#   - scripts/gmm_conformation.py   (GMM fitting + BIC comparison)
+# ChimeraX (run_dssp rule) uses the system installation, not this env.
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - gemmi>=0.7           # CIF/mmCIF parsing for Cα coordinate extraction
+  - numpy>=1.26
+  - pandas>=2.0
+  - scikit-learn>=1.4    # GaussianMixture
+  - matplotlib>=3.8
