@@ -6,7 +6,8 @@ Fits Gaussian Mixture Models (GMMs) to the distribution of TM2/TM8 inter-helix
 angles across all Boltz-2 predictions and compares model complexity using the
 Bayesian Information Criterion (BIC).
 
-Two models are evaluated:
+Models evaluated:
+  • GMM sweep k=1–10: full BIC curve to identify optimal number of components
   • GMM-3: one Gaussian per canonical MFS conformation
            (inward-open / occluded / outward-open)
   • GMM-6: one Gaussian per sub-state, allowing apo/holo discrimination
@@ -131,27 +132,43 @@ def plot_gmm(X: np.ndarray, gmm: GaussianMixture, df_valid: pd.DataFrame,
     print(f"[gmm] Plot saved: {out_path.name}")
 
 
-def plot_bic_comparison(bic3: float, bic6: float, out_path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(5, 4))
-    models  = ["GMM-3\n(inward / occluded / outward)", "GMM-6\n(6 sub-states)"]
-    bics    = [bic3, bic6]
-    colors  = ["#1565C0" if b == min(bics) else "#BDBDBD" for b in bics]
-    bars    = ax.bar(models, bics, color=colors, width=0.5)
-    y_off   = (max(bics) - min(bics)) * 0.02 + 1
-    for bar, val in zip(bars, bics):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            val + y_off,
-            f"{val:.1f}",
-            ha="center", va="bottom", fontsize=10,
-        )
-    ax.set_ylabel("BIC  (lower = better model)", fontsize=11)
-    ax.set_title(f"BIC comparison   ΔBIC = {bic6 - bic3:+.1f}", fontsize=12)
-    ax.set_ylim(min(bics) * 0.98, max(bics) * 1.04)
+def plot_bic_curve(bic_by_k: dict[int, float], best_k: int, out_path: Path) -> None:
+    """Line plot of BIC for k=1..max_k with the elbow/minimum highlighted."""
+    ks   = sorted(bic_by_k)
+    bics = [bic_by_k[k] for k in ks]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(ks, bics, "o-", color="#1565C0", lw=2, ms=7, zorder=3)
+    ax.axvline(best_k, color="#E53935", ls="--", lw=1.5,
+               label=f"Best k = {best_k}  (BIC = {bic_by_k[best_k]:.1f})")
+    # annotate k=3 and k=6 for biological reference
+    for k_ref in (3, 6):
+        if k_ref in bic_by_k:
+            ax.scatter([k_ref], [bic_by_k[k_ref]], color="#FF6F00", zorder=4, s=60)
+            ax.annotate(f"k={k_ref}", xy=(k_ref, bic_by_k[k_ref]),
+                        xytext=(k_ref + 0.15, bic_by_k[k_ref]),
+                        fontsize=8, color="#FF6F00", va="center")
+    ax.set_xlabel("Number of GMM components (k)", fontsize=12)
+    ax.set_ylabel("BIC  (lower = better)", fontsize=12)
+    ax.set_title("GMM model selection  —  BIC sweep k = 1 … 10", fontsize=13)
+    ax.set_xticks(ks)
+    ax.legend(fontsize=10)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"[gmm] BIC comparison plot saved: {out_path.name}")
+    print(f"[gmm] BIC curve saved: {out_path.name}")
+
+
+def plot_angle_histogram(X: np.ndarray, out_path: Path) -> None:
+    """Simple ungrouped histogram of all angles — shows overall density without labelling."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.hist(X.flatten(), bins=40, color="#455A64", alpha=0.75, edgecolor="white", lw=0.4)
+    ax.set_xlabel("TM2 / TM8 angle  (°)", fontsize=12)
+    ax.set_ylabel("Count", fontsize=12)
+    ax.set_title(f"Overall TM2/TM8 angle distribution  (n = {len(X)})", fontsize=13)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[gmm] Overall histogram saved: {out_path.name}")
 
 
 def plot_angle_by_conformation(df_valid: pd.DataFrame, gmm3: GaussianMixture,
@@ -221,14 +238,23 @@ def main():
 
     X = df_valid["angle_deg"].values.reshape(-1, 1)
 
-    # ── Fit GMMs ─────────────────────────────────────────────────────────────
-    print(f"[gmm] Fitting GMM-3 (n_init={args.n_init}) ...")
-    gmm3 = fit_gmm(X, n_components=3, n_init=args.n_init)
-    print(f"[gmm] Fitting GMM-6 (n_init={args.n_init}) ...")
-    gmm6 = fit_gmm(X, n_components=6, n_init=args.n_init)
+    # ── BIC sweep k=1–10 ─────────────────────────────────────────────────────
+    MAX_K = 10
+    print(f"[gmm] BIC sweep k=1..{MAX_K} (n_init={args.n_init}) ...")
+    bic_by_k: dict[int, float] = {}
+    gmm_by_k: dict[int, GaussianMixture] = {}
+    for k in range(1, MAX_K + 1):
+        gmm_k = fit_gmm(X, n_components=k, n_init=args.n_init)
+        bic_by_k[k] = round(gmm_k.bic(X), 3)
+        gmm_by_k[k] = gmm_k
+        print(f"[gmm]   k={k:2d}  BIC = {bic_by_k[k]:.1f}")
+    best_k = min(bic_by_k, key=bic_by_k.__getitem__)
+    print(f"[gmm] Best k by BIC = {best_k}")
 
-    bic3 = gmm3.bic(X)
-    bic6 = gmm6.bic(X)
+    gmm3 = gmm_by_k[3]
+    gmm6 = gmm_by_k[6]
+    bic3 = bic_by_k[3]
+    bic6 = bic_by_k[6]
     delta_bic = bic6 - bic3
 
     if delta_bic < -10:
@@ -259,6 +285,8 @@ def main():
         "angle_std_deg":        float(df_valid["angle_deg"].std()),
         "angle_min_deg":        float(df_valid["angle_deg"].min()),
         "angle_max_deg":        float(df_valid["angle_deg"].max()),
+        "bic_by_k":             bic_by_k,
+        "best_k_by_bic":        best_k,
         "gmm3": {"bic": round(bic3, 3), **_sorted_components(gmm3)},
         "gmm6": {"bic": round(bic6, 3), **_sorted_components(gmm6)},
         "delta_bic_6_minus_3":  round(delta_bic, 3),
@@ -279,17 +307,19 @@ def main():
     df_valid.to_csv(out_dir / "angles_with_assignments.csv", index=False)
 
     # ── Plots ─────────────────────────────────────────────────────────────────
+    plot_angle_histogram(X, out_dir / "angle_histogram.png")
+    plot_bic_curve(bic_by_k, best_k, out_dir / "bic_curve.png")
     plot_gmm(X, gmm3, df_valid, "GMM-3  (inward / occluded / outward)",
              GMM3_LABELS, bic3, out_dir / "gmm3.png")
     plot_gmm(X, gmm6, df_valid, "GMM-6  (6 sub-states)",
              GMM6_LABELS, bic6, out_dir / "gmm6.png")
-    plot_bic_comparison(bic3, bic6, out_dir / "bic_comparison.png")
     plot_angle_by_conformation(df_valid, gmm3, out_dir / "angle_by_conformation.png")
 
     # ── Sentinel ──────────────────────────────────────────────────────────────
     Path(args.sentinel).write_text(
-        f"GMM done. Preferred: {report['preferred_model']}. "
-        f"BIC(3)={bic3:.1f}, BIC(6)={bic6:.1f}, ΔBIC={delta_bic:+.1f}.\n"
+        f"GMM done. Best k={best_k} (BIC sweep). "
+        f"BIC(3)={bic3:.1f}, BIC(6)={bic6:.1f}, ΔBIC={delta_bic:+.1f}. "
+        f"Preferred biological model: {report['preferred_model']}.\n"
     )
     print(f"[gmm] Done. Sentinel: {args.sentinel}")
 
