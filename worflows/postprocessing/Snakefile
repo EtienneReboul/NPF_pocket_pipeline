@@ -1,12 +1,16 @@
 """
-Snakefile_postprocess — Stages 6–9
-====================================
+Snakefile_postprocess — Stages 6–13
+=====================================
 Run locally (Mac / workstation) after Boltz-2 has completed on the cluster.
 
-  6. ChimeraX   — energy minimization, CIF → PDB
-  7. PLIP        — protein–ligand interaction profiling via Docker
-  8. pliparser   — PLIP report → CSV + ChimeraX .cxc
-  9. Aggregate   — merge per-sample CSVs (one summary per protein × conformation)
+  6.  ChimeraX    — energy minimization, CIF → PDB
+  7.  PLIP         — protein–ligand interaction profiling via Docker
+  8.  pliparser    — PLIP report → CSV + ChimeraX .cxc
+  9.  Aggregate    — merge per-sample CSVs (one summary per protein × conformation)
+  10. DSSP         — ChimeraX DSSP on raw Boltz-2 CIF (TM helix sanity check)
+  11. tm_angle     — TM2/TM8 helix axis angle per sample
+  12. collect_angles — merge per-sample angles (one CSV per protein × conformation)
+  13. gmm_analysis — fit 3- and 6-component GMMs, compare by BIC
 
 Prerequisites:
   - Snakefile_preprocess completed (stages 1–4)
@@ -31,11 +35,21 @@ BOLTZ_OUT    = Path(DIRS["boltz_out"])
 SANITIZED_DIR = Path(DIRS.get("sanitized", "results/sanitized"))
 MIN_DIR      = Path(DIRS["minimized"])
 PLIP_DIR     = Path(DIRS["plip"])
+INTERPRO_DIR = Path(DIRS["interpro"])
+DSSP_DIR     = Path(DIRS["dssp"])
+TM_ANG_DIR   = Path(DIRS["tm_angles"])
+GMM_DIR      = Path(DIRS["gmm"])
 LOG_DIR      = Path(DIRS["logs"])
+
+FASTA_DIR    = Path(DIRS["fasta"])
 
 PLIP_CFG     = config["plip"]
 VIZ_CFG      = config["visualization"]
+TM_ANG_CFG   = config["tm_angle"]
+GMM_CFG      = config["gmm"]
 CHIMERAX_BIN = config["chimerax_bin"]
+
+TOPO_SENTINEL = INTERPRO_DIR / "deeptmhmm_topology.done"
 CONFORMATIONS = list(config["templates"]["conformations"].keys())
 
 wildcard_constraints:
@@ -114,12 +128,20 @@ for protein in PROTEINS:
         TARGETS.append(
             str(PLIP_DIR / protein / conformation / "summary.csv")
         )
+        # per-conformation angle CSV (stages 10–12)
+        TARGETS.append(
+            str(TM_ANG_DIR / protein / conformation / "angles.csv")
+        )
         # ChimeraX visualization scripts (one per sample)
         for sid in sample_ids:
             TARGETS.append(
                 str(PLIP_DIR / protein / conformation / sid
                     / "model_minimized_report" / "interaction.cxc")
             )
+
+# GMM report is global across all protein × conformation combos (stage 13)
+if ALL_JOBS:
+    TARGETS.append(str(GMM_DIR / "gmm_report.json"))
 
 print(f"[postprocess] {len(ALL_JOBS)} protein × conformation combos, {len(TARGETS)} targets.")
 
@@ -332,6 +354,147 @@ rule aggregate_plip:
         python scripts/aggregate_plip_summary.py \\
             --output {output} \\
             {input.csvs} \\
+        > {log} 2>&1
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGES 10–13 — Conformational angle classification via GMM
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 2b (prerequisite): TM topology via DeepTMHMM ────────────────────────
+# Submits all NPF sequences to DeepTMHMM (BioLib cloud). If the GFF3 output
+# already exists the cloud call is skipped (cached run). The script aborts
+# with a non-zero exit code — halting the pipeline — if any protein does not
+# have exactly 12 predicted TM helices.
+
+rule run_deeptmhmm_topology:
+    input:
+        fasta    = str(FASTA_DIR / "npf_arabidopsis.fasta"),
+        msa_done = str(MSA_SENTINEL),
+    output:
+        gff3     = str(INTERPRO_DIR / "deeptmhmm_TMRs.gff3"),
+        topology = str(INTERPRO_DIR / "tm_topology_summary.json"),
+        sentinel = str(TOPO_SENTINEL),
+    log:
+        str(LOG_DIR / "deeptmhmm_topology.log"),
+    shell:
+        """
+        python scripts/run_deeptmhmm_topology.py \\
+            --fasta       {input.fasta} \\
+            --gff3        {output.gff3} \\
+            --topology    {output.topology} \\
+            --sentinel    {output.sentinel} \\
+            --expected-tm 12 \\
+        > {log} 2>&1
+        """
+
+
+# ── Stage 10: ChimeraX DSSP on raw Boltz-2 CIF ────────────────────────────────
+
+rule run_dssp:
+    input:
+        cif = lambda wc: cif_path_for_sample(wc.protein, wc.conformation, wc.sample_id),
+    output:
+        dssp = str(DSSP_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "dssp.json"),
+    params:
+        chimerax = CHIMERAX_BIN,
+    log:
+        str(LOG_DIR / "dssp" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    shell:
+        """
+        mkdir -p $(dirname {output.dssp})
+        {params.chimerax} --nogui \\
+            --script "scripts/chimerax_dssp.py {input.cif} {output.dssp}" \\
+        > {log} 2>&1
+        """
+
+
+# ── Stage 11: TM2/TM8 angle per sample ────────────────────────────────────────
+
+rule compute_tm_angle:
+    input:
+        cif      = lambda wc: cif_path_for_sample(wc.protein, wc.conformation, wc.sample_id),
+        dssp     = str(DSSP_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "dssp.json"),
+        topology = str(INTERPRO_DIR / "tm_topology_summary.json"),
+    output:
+        angle_csv = str(TM_ANG_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "angle.csv"),
+    params:
+        min_helix_frac = TM_ANG_CFG["min_helix_frac"],
+    log:
+        str(LOG_DIR / "tm_angle" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    conda:
+        "../../envs/tm_analysis.yaml"
+    shell:
+        """
+        python scripts/compute_tm_angle.py \\
+            --cif           {input.cif} \\
+            --dssp          {input.dssp} \\
+            --topology      {input.topology} \\
+            --protein       {wildcards.protein} \\
+            --conformation  {wildcards.conformation} \\
+            --sample-id     {wildcards.sample_id} \\
+            --output        {output.angle_csv} \\
+            --min-helix-frac {params.min_helix_frac} \\
+        > {log} 2>&1
+        """
+
+
+# ── Stage 12: Collect per-sample angles for one protein × conformation ────────
+
+def angle_csvs_for_protein_conformation(wildcards):
+    sample_ids = ALL_JOBS.get((wildcards.protein, wildcards.conformation), [])
+    return [
+        str(TM_ANG_DIR / wildcards.protein / wildcards.conformation / sid / "angle.csv")
+        for sid in sample_ids
+    ]
+
+
+rule collect_tm_angles:
+    input:
+        csvs = angle_csvs_for_protein_conformation,
+    output:
+        str(TM_ANG_DIR / "{protein}" / "{conformation}" / "angles.csv"),
+    log:
+        str(LOG_DIR / "collect_angles" / "{protein}" / "{conformation}.log"),
+    conda:
+        "../../envs/aggregate.yaml"
+    shell:
+        """
+        python scripts/collect_angles.py --output {output} {input.csvs} > {log} 2>&1
+        """
+
+
+# ── Stage 13: Fit GMM-3 and GMM-6 + BIC comparison (global) ──────────────────
+
+def all_angle_csv_inputs(wildcards):
+    """Return all per-conformation angle CSVs (one per protein × conformation)."""
+    return [
+        str(TM_ANG_DIR / protein / conformation / "angles.csv")
+        for protein, conformation in ALL_JOBS
+    ]
+
+
+rule gmm_analysis:
+    input:
+        csvs = all_angle_csv_inputs,
+    output:
+        sentinel = str(GMM_DIR / "gmm.done"),
+        report   = str(GMM_DIR / "gmm_report.json"),
+    params:
+        out_dir = str(GMM_DIR),
+        n_init  = GMM_CFG["n_init"],
+    log:
+        str(LOG_DIR / "gmm_analysis.log"),
+    conda:
+        "../../envs/tm_analysis.yaml"
+    shell:
+        """
+        python scripts/gmm_conformation.py \\
+            --input      {input.csvs} \\
+            --output-dir {params.out_dir} \\
+            --sentinel   {output.sentinel} \\
+            --n-init     {params.n_init} \\
         > {log} 2>&1
         """
 

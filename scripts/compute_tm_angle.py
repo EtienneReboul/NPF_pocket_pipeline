@@ -151,7 +151,7 @@ def main():
     # Prefer Phobius (more accurate for eukaryotes), fall back to TMHMM
     tool_used = None
     raw_helices = None
-    for tool in ("PHOBIUS", "TMHMM"):
+    for tool in ("DEEPTMHMM", "UNIPROT", "PHOBIUS", "TMHMM"):
         if tool in prot_topo and prot_topo[tool]:
             tool_used  = tool
             raw_helices = prot_topo[tool]

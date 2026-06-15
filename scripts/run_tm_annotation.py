@@ -34,8 +34,12 @@ from Bio import SeqIO # pyright: ignore[reportMissingImports]
 
 EBI_BASE     = "https://www.ebi.ac.uk/Tools/services/rest/iprscan5"
 MAX_PARALLEL = 25
-TM_APPS      = ["Phobius", "TMHMM"]
-TM_LIBRARIES = {"PHOBIUS", "TMHMM"}
+TM_APPS        = ["Phobius", "TMHMM"]
+TM_LIBRARIES   = {"PHOBIUS", "TMHMM"}
+# Accession codes that identify a transmembrane helix in each tool's output.
+# Phobius also emits CYTOPLASMIC_DOMAIN / NON_CYTOPLASMIC_DOMAIN entries
+# (same library tag), so we must filter by accession, not just by library.
+TM_ACCESSIONS  = {"TRANSMEMBRANE", "TMhelix"}
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -148,11 +152,11 @@ def extract_tm_helices(result: dict) -> dict[str, list[dict]]:
             sig      = obj.get("signature", {})
             lib_info = sig.get("signatureLibraryRelease", {})
             library  = lib_info.get("library", "").upper()
-            if library in TM_LIBRARIES:
+            accession = sig.get("accession", "")
+            if library in TM_LIBRARIES and accession in TM_ACCESSIONS:
                 locs = [
                     {"start": loc["start"], "end": loc["end"]}
                     for loc in obj.get("locations", [])
-                    if loc.get("locationType") == "TRANSMEMBRANE"
                 ]
                 if locs:
                     tm_by_tool.setdefault(library, []).extend(locs)
