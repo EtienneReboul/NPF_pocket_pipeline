@@ -2,21 +2,26 @@
 """
 scripts/gmm_conformation.py
 ============================
-Fits Gaussian Mixture Models (GMMs) to the distribution of TM2/TM8 inter-helix
-angles across all Boltz-2 predictions and compares model complexity using the
-Bayesian Information Criterion (BIC).
+Fits Gaussian Mixture Models (GMMs) to the distribution of MFS gate distances
+across all Boltz-2 predictions and compares model complexity using BIC.
+
+Feature space (2D):
+  • ext_gate_A — minimum Cα tip distance at the extracellular gate
+                 (TM1/TM2 N-bundle tips  vs  TM7/TM8 C-bundle tips)
+  • int_gate_A — minimum Cα tip distance at the intracellular gate
+                 (TM4/TM5 N-bundle tips  vs  TM10/TM11 C-bundle tips)
+
+These two distances directly encode the alternating-access state:
+  outward_open  → high ext_gate, low int_gate
+  inward_open   → low  ext_gate, high int_gate
+  occluded      → low  ext_gate, low  int_gate
+
+TM2/TM8 angle (Qureshi 2020) is retained as a diagnostic column.
 
 Models evaluated:
-  • GMM sweep k=1–10: full BIC curve to identify optimal number of components
+  • GMM sweep k=1–10: BIC curve to identify optimal number of components
   • GMM-3: one Gaussian per canonical MFS conformation
-           (inward-open / occluded / outward-open)
-  • GMM-6: one Gaussian per sub-state, allowing apo/holo discrimination
-           within each main conformation
-
-BIC interpretation: lower is better.  ΔBIC = BIC(6) − BIC(3).
-  •  ΔBIC < −10  → strong evidence the 6-component model is more informative
-  • −10 < ΔBIC < 0 → weak evidence for GMM-6
-  •  ΔBIC > 0   → GMM-3 is sufficient; extra complexity is not justified
+  • GMM-6: one per sub-state (apo/holo within each main conformation)
 
 Reference: Qureshi et al. (2020) Nature https://doi.org/10.1038/s41586-020-1963-z
 
@@ -33,8 +38,9 @@ import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")          # non-interactive backend for headless runs
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 import numpy as np
 import pandas as pd
 from sklearn.mixture import GaussianMixture
@@ -69,61 +75,75 @@ def fit_gmm(X: np.ndarray, n_components: int, n_init: int) -> GaussianMixture:
     return gmm
 
 
-def component_pdf(x_range: np.ndarray, mean: float, var: float, weight: float) -> np.ndarray:
-    return weight * np.exp(-0.5 * (x_range - mean) ** 2 / var) / np.sqrt(2 * np.pi * var)
+def component_order(gmm: GaussianMixture) -> np.ndarray:
+    """Sort components by ext_gate_mean − int_gate_mean (descending).
+    Result: index 0 = outward (high ext, low int), last = inward (low ext, high int)."""
+    scores = gmm.means_[:, 0] - gmm.means_[:, 1]
+    return np.argsort(-scores)
 
 
-# ── Plots ──────────────────────────────────────────────────────────────────────
+# ── Colours ────────────────────────────────────────────────────────────────────
 
 CONFORMATION_COLORS = {
-    "outward_open_apo":     "#1976D2",
+    "outward_open_apo":      "#1976D2",
     "outward_occluded_holo": "#42A5F5",
-    "occluded_apo":         "#43A047",
-    "occluded_holo":        "#A5D6A7",
-    "inward_open_apo":      "#E53935",
-    "inward_occluded_holo": "#EF9A9A",
+    "occluded_apo":          "#43A047",
+    "occluded_holo":         "#A5D6A7",
+    "inward_open_apo":       "#E53935",
+    "inward_occluded_holo":  "#EF9A9A",
 }
 
-GMM3_LABELS  = ["Outward-open", "Occluded", "Inward-open"]
-GMM6_LABELS  = [
+GMM3_LABELS = ["Outward-open", "Occluded", "Inward-open"]
+GMM6_LABELS = [
     "Outward-open (apo)", "Outward-open (holo)",
     "Occluded (apo)",     "Occluded (holo)",
     "Inward-open (apo)",  "Inward-open (holo)",
 ]
 
 
-def plot_gmm(X: np.ndarray, gmm: GaussianMixture, df_valid: pd.DataFrame,
-             title: str, component_labels: list[str], bic: float,
-             out_path: Path) -> None:
-    x_range = np.linspace(X.min() - 5, X.max() + 5, 600)
-    fig, ax = plt.subplots(figsize=(11, 5))
+# ── Plots ──────────────────────────────────────────────────────────────────────
 
-    # Histogram coloured by known conformation
-    conformations = sorted(df_valid["conformation"].unique())
+def _draw_ellipse(ax, mean, cov, n_std: float = 1.5, **kwargs):
+    vals, vecs = np.linalg.eigh(cov)
+    idx = vals.argsort()[::-1]
+    vals, vecs = vals[idx], vecs[:, idx]
+    theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
+    w, h = 2 * n_std * np.sqrt(np.abs(vals))
+    ax.add_patch(Ellipse(xy=mean, width=w, height=h, angle=theta, **kwargs))
+
+
+def plot_gate_scatter(X: np.ndarray, gmm: GaussianMixture, df: pd.DataFrame,
+                      title: str, component_labels: list[str], bic: float,
+                      out_path: Path) -> None:
+    """2-D scatter of (ext_gate, int_gate) coloured by input conformation, with GMM ellipses."""
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    conformations = sorted(df["conformation"].unique())
     for conf in conformations:
-        angles = df_valid.loc[df_valid["conformation"] == conf, "angle_deg"].values
-        color  = CONFORMATION_COLORS.get(conf, "#9E9E9E")
-        ax.hist(angles, bins=25, density=True, alpha=0.35, color=color, label=conf)
+        mask = df["conformation"] == conf
+        ax.scatter(
+            X[mask.values, 0], X[mask.values, 1],
+            s=14, alpha=0.4, linewidths=0,
+            color=CONFORMATION_COLORS.get(conf, "#9E9E9E"),
+            label=conf,
+        )
 
-    # Total GMM density
-    log_prob = gmm.score_samples(x_range.reshape(-1, 1))
-    ax.plot(x_range, np.exp(log_prob), "k--", lw=2, label="Total GMM", zorder=5)
-
-    # Individual components sorted by mean
-    order   = np.argsort(gmm.means_.flatten())
-    colors  = plt.cm.tab10(np.linspace(0, 0.8, gmm.n_components))
+    order = component_order(gmm)
+    cmap  = plt.cm.tab10(np.linspace(0, 0.8, gmm.n_components))
     for rank, i in enumerate(order):
-        mean   = float(gmm.means_[i, 0])
-        var    = float(gmm.covariances_[i, 0, 0])
-        weight = float(gmm.weights_[i])
+        mean   = gmm.means_[i]
+        cov    = gmm.covariances_[i]
+        weight = gmm.weights_[i]
         label  = component_labels[rank] if rank < len(component_labels) else f"C{rank+1}"
-        pdf    = component_pdf(x_range, mean, var, weight)
-        ax.fill_between(x_range, pdf, alpha=0.20, color=colors[rank])
-        ax.plot(x_range, pdf, color=colors[rank], lw=1.8,
-                label=f"{label}  μ={mean:.1f}°  w={weight:.2f}")
+        color  = cmap[rank]
+        _draw_ellipse(ax, mean, cov, n_std=1.5,
+                      edgecolor=color, facecolor=color, alpha=0.12, lw=1.5)
+        ax.scatter(*mean, marker="*", s=220, color=color, zorder=5,
+                   label=f"{label}  w={weight:.2f}  "
+                         f"ext={mean[0]:.1f}Å  int={mean[1]:.1f}Å")
 
-    ax.set_xlabel("TM2 / TM8 angle  (°)", fontsize=12)
-    ax.set_ylabel("Density", fontsize=12)
+    ax.set_xlabel("Extracellular gate distance  (Å)", fontsize=12)
+    ax.set_ylabel("Intracellular gate distance  (Å)", fontsize=12)
     ax.set_title(f"{title}   BIC = {bic:.1f}", fontsize=13)
     ax.legend(fontsize=7, ncol=2, loc="upper right")
     plt.tight_layout()
@@ -133,14 +153,12 @@ def plot_gmm(X: np.ndarray, gmm: GaussianMixture, df_valid: pd.DataFrame,
 
 
 def plot_bic_curve(bic_by_k: dict[int, float], best_k: int, out_path: Path) -> None:
-    """Line plot of BIC for k=1..max_k with the elbow/minimum highlighted."""
     ks   = sorted(bic_by_k)
     bics = [bic_by_k[k] for k in ks]
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(ks, bics, "o-", color="#1565C0", lw=2, ms=7, zorder=3)
     ax.axvline(best_k, color="#E53935", ls="--", lw=1.5,
                label=f"Best k = {best_k}  (BIC = {bic_by_k[best_k]:.1f})")
-    # annotate k=3 and k=6 for biological reference
     for k_ref in (3, 6):
         if k_ref in bic_by_k:
             ax.scatter([k_ref], [bic_by_k[k_ref]], color="#FF6F00", zorder=4, s=60)
@@ -158,46 +176,50 @@ def plot_bic_curve(bic_by_k: dict[int, float], best_k: int, out_path: Path) -> N
     print(f"[gmm] BIC curve saved: {out_path.name}")
 
 
-def plot_angle_histogram(X: np.ndarray, out_path: Path) -> None:
-    """Simple ungrouped histogram of all angles — shows overall density without labelling."""
+def plot_angle_histogram(df: pd.DataFrame, out_path: Path) -> None:
+    """Ungrouped TM2/TM8 angle distribution — diagnostic."""
+    angles = df["angle_deg"].dropna().values
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(X.flatten(), bins=40, color="#455A64", alpha=0.75, edgecolor="white", lw=0.4)
+    ax.hist(angles, bins=40, color="#455A64", alpha=0.75, edgecolor="white", lw=0.4)
     ax.set_xlabel("TM2 / TM8 angle  (°)", fontsize=12)
     ax.set_ylabel("Count", fontsize=12)
-    ax.set_title(f"Overall TM2/TM8 angle distribution  (n = {len(X)})", fontsize=13)
+    ax.set_title(f"TM2/TM8 angle distribution  (n = {len(angles)})  [diagnostic]", fontsize=13)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"[gmm] Overall histogram saved: {out_path.name}")
+    print(f"[gmm] Angle histogram saved: {out_path.name}")
 
 
-def plot_angle_by_conformation(df_valid: pd.DataFrame, gmm3: GaussianMixture,
-                               out_path: Path) -> None:
-    """Strip-plot of angles per conformation coloured by GMM-3 assignment."""
-    conformations = sorted(df_valid["conformation"].unique())
+def plot_gate_by_conformation(df: pd.DataFrame, out_path: Path) -> None:
+    """Strip-plot of ext_gate and int_gate per template conformation."""
+    conformations = sorted(df["conformation"].unique())
     n = len(conformations)
-    fig, ax = plt.subplots(figsize=(max(6, n * 1.4), 5))
-    cmap = plt.cm.RdYlBu
-    for xi, conf in enumerate(conformations):
-        sub     = df_valid[df_valid["conformation"] == conf]
-        angles  = sub["angle_deg"].values
-        comps   = sub["gmm3_component"].values
-        jitter  = np.random.default_rng(0).uniform(-0.15, 0.15, len(angles))
-        scatter = ax.scatter(
-            np.full(len(angles), xi) + jitter,
-            angles,
-            c=comps, cmap=cmap, vmin=0, vmax=2,
-            s=20, alpha=0.6, linewidths=0,
-        )
-    plt.colorbar(scatter, ax=ax, label="GMM-3 component (0=outward, 1=occluded, 2=inward)")
-    ax.set_xticks(range(n))
-    ax.set_xticklabels(conformations, rotation=35, ha="right", fontsize=9)
-    ax.set_ylabel("TM2 / TM8 angle  (°)", fontsize=11)
-    ax.set_title("Angle distribution per template conformation", fontsize=12)
+    fig, axes = plt.subplots(1, 2, figsize=(max(8, n * 1.4), 5), sharey=False)
+    rng = np.random.default_rng(0)
+
+    for ax, col, ylabel in zip(
+        axes,
+        ["ext_gate_A", "int_gate_A"],
+        ["Extracellular gate (Å)", "Intracellular gate (Å)"],
+    ):
+        for xi, conf in enumerate(conformations):
+            sub = df[df["conformation"] == conf][col].dropna().values
+            jitter = rng.uniform(-0.15, 0.15, len(sub))
+            ax.scatter(
+                np.full(len(sub), xi) + jitter, sub,
+                color=CONFORMATION_COLORS.get(conf, "#9E9E9E"),
+                s=14, alpha=0.5, linewidths=0,
+            )
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(conformations, rotation=35, ha="right", fontsize=8)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.set_title(ylabel, fontsize=11)
+
+    plt.suptitle("Gate distances per template conformation", fontsize=12, y=1.01)
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"[gmm] Per-conformation plot saved: {out_path.name}")
+    print(f"[gmm] Gate-by-conformation plot saved: {out_path.name}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -219,28 +241,34 @@ def main():
         print("[gmm] ERROR: no valid input files — aborting")
         sys.exit(1)
 
-    all_data  = pd.concat(frames, ignore_index=True)
-    df_valid  = all_data[
-        (all_data["status"].str.startswith("ok")) &
-        all_data["angle_deg"].notna()
+    all_data = pd.concat(frames, ignore_index=True)
+
+    # Rows with status "ok*" AND both gate distances present
+    df_valid = all_data[
+        all_data["status"].str.startswith("ok") &
+        all_data["ext_gate_A"].notna() &
+        all_data["int_gate_A"].notna()
     ].copy()
 
+    n_total   = len(all_data)
+    n_no_gate = (all_data["status"].str.startswith("ok") &
+                 (all_data["ext_gate_A"].isna() | all_data["int_gate_A"].isna())).sum()
+
     print(
-        f"[gmm] Loaded {len(all_data)} rows total; "
-        f"{len(df_valid)} valid angle measurements"
+        f"[gmm] Loaded {n_total} rows total; "
+        f"{len(df_valid)} with valid gate distances"
+        + (f" ({n_no_gate} ok rows lack gate data — rerun compute_tm_angle)" if n_no_gate else "")
     )
 
     if len(df_valid) < 12:
-        print(
-            f"[gmm] ERROR: only {len(df_valid)} valid angles — need ≥12 for reliable GMM fitting"
-        )
+        print(f"[gmm] ERROR: only {len(df_valid)} valid rows — need ≥12 for GMM fitting")
         sys.exit(1)
 
-    X = df_valid["angle_deg"].values.reshape(-1, 1)
+    X = df_valid[["ext_gate_A", "int_gate_A"]].values   # (n, 2)
 
     # ── BIC sweep k=1–10 ─────────────────────────────────────────────────────
     MAX_K = 10
-    print(f"[gmm] BIC sweep k=1..{MAX_K} (n_init={args.n_init}) ...")
+    print(f"[gmm] BIC sweep k=1..{MAX_K} on 2-D gate distances (n_init={args.n_init}) ...")
     bic_by_k: dict[int, float] = {}
     gmm_by_k: dict[int, GaussianMixture] = {}
     for k in range(1, MAX_K + 1):
@@ -258,71 +286,86 @@ def main():
     delta_bic = bic6 - bic3
 
     if delta_bic < -10:
-        interpretation = f"GMM-6 is strongly preferred (ΔBIC = {delta_bic:+.1f}): 6 sub-states better explain the data"
+        interpretation = (f"GMM-6 is strongly preferred (ΔBIC = {delta_bic:+.1f}): "
+                          "6 sub-states better explain the gate-distance distribution")
     elif delta_bic < 0:
-        interpretation = f"Weak evidence for GMM-6 (ΔBIC = {delta_bic:+.1f}): 6 sub-states marginally better"
+        interpretation = (f"Weak evidence for GMM-6 (ΔBIC = {delta_bic:+.1f}): "
+                          "6 sub-states marginally better")
     else:
-        interpretation = f"GMM-3 is sufficient (ΔBIC = {delta_bic:+.1f}): additional sub-states not justified"
+        interpretation = (f"GMM-3 is sufficient (ΔBIC = {delta_bic:+.1f}): "
+                          "additional sub-states not justified")
 
     print(f"[gmm] BIC  GMM-3 = {bic3:.2f}")
     print(f"[gmm] BIC  GMM-6 = {bic6:.2f}")
     print(f"[gmm] {interpretation}")
 
-    # ── Sort GMM components by mean for interpretable labelling ──────────────
+    # ── Build report ─────────────────────────────────────────────────────────
     def _sorted_components(gmm):
-        idx = np.argsort(gmm.means_.flatten())
+        idx = component_order(gmm)
         return {
-            "means":       gmm.means_.flatten()[idx].tolist(),
-            "variances":   gmm.covariances_.flatten()[idx].tolist(),
-            "weights":     gmm.weights_[idx].tolist(),
-            "converged":   bool(gmm.converged_),
+            "means_ext_gate": gmm.means_[idx, 0].round(2).tolist(),
+            "means_int_gate": gmm.means_[idx, 1].round(2).tolist(),
+            "weights":        gmm.weights_[idx].round(4).tolist(),
+            "converged":      bool(gmm.converged_),
         }
 
     report = {
-        "n_valid_samples":      int(len(df_valid)),
-        "n_invalid_samples":    int(len(all_data) - len(df_valid)),
-        "angle_mean_deg":       float(df_valid["angle_deg"].mean()),
-        "angle_std_deg":        float(df_valid["angle_deg"].std()),
-        "angle_min_deg":        float(df_valid["angle_deg"].min()),
-        "angle_max_deg":        float(df_valid["angle_deg"].max()),
-        "bic_by_k":             bic_by_k,
-        "best_k_by_bic":        best_k,
-        "gmm3": {"bic": round(bic3, 3), **_sorted_components(gmm3)},
-        "gmm6": {"bic": round(bic6, 3), **_sorted_components(gmm6)},
-        "delta_bic_6_minus_3":  round(delta_bic, 3),
-        "preferred_model":      "GMM-6" if delta_bic < 0 else "GMM-3",
-        "interpretation":       interpretation,
+        "n_valid_samples":       int(len(df_valid)),
+        "n_invalid_samples":     int(n_total - len(df_valid)),
+        "ext_gate_mean_A":       round(float(df_valid["ext_gate_A"].mean()), 2),
+        "ext_gate_std_A":        round(float(df_valid["ext_gate_A"].std()),  2),
+        "int_gate_mean_A":       round(float(df_valid["int_gate_A"].mean()), 2),
+        "int_gate_std_A":        round(float(df_valid["int_gate_A"].std()),  2),
+        "angle_mean_deg":        round(float(df_valid["angle_deg"].mean()),  2) if "angle_deg" in df_valid else None,
+        "bic_by_k":              bic_by_k,
+        "best_k_by_bic":         best_k,
+        "gmm3":                  {"bic": round(bic3, 3), **_sorted_components(gmm3)},
+        "gmm6":                  {"bic": round(bic6, 3), **_sorted_components(gmm6)},
+        "delta_bic_6_minus_3":   round(delta_bic, 3),
+        "preferred_model":       "GMM-6" if delta_bic < 0 else "GMM-3",
+        "interpretation":        interpretation,
     }
-
     (out_dir / "gmm_report.json").write_text(json.dumps(report, indent=2))
     print(f"[gmm] Report: {out_dir / 'gmm_report.json'}")
 
     # ── Per-sample assignments ────────────────────────────────────────────────
-    df_valid["gmm3_component"] = gmm3.predict(X)
-    df_valid["gmm6_component"] = gmm6.predict(X)
+    # Components are sorted: 0 = outward (high ext − int), last = inward
+    def _rank_map(gmm):
+        order = component_order(gmm)
+        return {old: new for new, old in enumerate(order)}
+
+    df_valid["gmm3_component"]    = gmm3.predict(X)
+    df_valid["gmm6_component"]    = gmm6.predict(X)
     df_valid["gmm_best_component"] = gmm_by_k[best_k].predict(X)
-    # Re-label components by ascending mean so 0 = lowest angle
+
     for col, gmm in [
-        ("gmm3_component", gmm3),
-        ("gmm6_component", gmm6),
+        ("gmm3_component",     gmm3),
+        ("gmm6_component",     gmm6),
         ("gmm_best_component", gmm_by_k[best_k]),
     ]:
-        rank_map = {old: new for new, old in enumerate(np.argsort(gmm.means_.flatten()))}
-        df_valid[col] = df_valid[col].map(rank_map)
+        rm = _rank_map(gmm)
+        df_valid[col] = df_valid[col].map(rm)
+
     df_valid.to_csv(out_dir / "angles_with_assignments.csv", index=False)
 
     # ── Plots ─────────────────────────────────────────────────────────────────
-    plot_angle_histogram(X, out_dir / "angle_histogram.png")
     plot_bic_curve(bic_by_k, best_k, out_dir / "bic_curve.png")
-    plot_gmm(X, gmm3, df_valid, "GMM-3  (inward / occluded / outward)",
-             GMM3_LABELS, bic3, out_dir / "gmm3.png")
-    plot_gmm(X, gmm6, df_valid, "GMM-6  (6 sub-states)",
-             GMM6_LABELS, bic6, out_dir / "gmm6.png")
-    plot_angle_by_conformation(df_valid, gmm3, out_dir / "angle_by_conformation.png")
+    plot_gate_scatter(X, gmm3, df_valid,
+                      "GMM-3  (outward / occluded / inward)",
+                      GMM3_LABELS, bic3, out_dir / "gmm3.png")
+    plot_gate_scatter(X, gmm6, df_valid,
+                      "GMM-6  (6 sub-states)",
+                      GMM6_LABELS, bic6, out_dir / "gmm6.png")
+    plot_gate_scatter(X, gmm_by_k[best_k], df_valid,
+                      f"GMM-{best_k}  (BIC-optimal)",
+                      GMM3_LABELS if best_k == 3 else GMM6_LABELS, bic_by_k[best_k],
+                      out_dir / "gmm_best.png")
+    plot_angle_histogram(df_valid, out_dir / "angle_histogram.png")
+    plot_gate_by_conformation(df_valid, out_dir / "gate_by_conformation.png")
 
     # ── Sentinel ──────────────────────────────────────────────────────────────
     Path(args.sentinel).write_text(
-        f"GMM done. Best k={best_k} (BIC sweep). "
+        f"GMM done. Best k={best_k} (BIC sweep on 2-D gate distances). "
         f"BIC(3)={bic3:.1f}, BIC(6)={bic6:.1f}, ΔBIC={delta_bic:+.1f}. "
         f"Preferred biological model: {report['preferred_model']}.\n"
     )

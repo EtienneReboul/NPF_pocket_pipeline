@@ -500,36 +500,90 @@ def _emit(results, anchors, target_scores, out_dir, args):
     print(f"\nwrote {out_dir/'templates_selected.yaml'} and {out_dir/'report.txt'}")
 
 
-def annotate_reference(cif_path):
-    """Print a DSSP draft of helical segments to seed REFERENCE_ANNOTATIONS."""
+def _find_chimerax(hint: str | None = None) -> str | None:
+    import shutil
+    candidates = []
+    if hint:
+        candidates.append(hint)
+    for name in ("ChimeraX", "chimerax"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    candidates += [
+        "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX",
+        "/Applications/UCSF ChimeraX.app/Contents/MacOS/ChimeraX",
+    ]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    return None
+
+
+def annotate_reference(cif_path, chimerax_bin: str | None = None):
+    """Print a DSSP draft of helical segments (via ChimeraX) to seed REFERENCE_ANNOTATIONS."""
     import subprocess, tempfile
-    st = load(cif_path)
-    pdb_tmp = tempfile.NamedTemporaryFile(suffix=".pdb", delete=False).name
-    st.write_pdb(pdb_tmp)
-    try:
-        out = subprocess.run(["mkdssp", pdb_tmp], capture_output=True, text=True).stdout
-    except FileNotFoundError:
-        print("mkdssp not found; install dssp or annotate manually", file=sys.stderr)
+    chimerax = _find_chimerax(chimerax_bin)
+    if not chimerax:
+        print("ChimeraX not found; pass --chimerax-bin or add ChimeraX to PATH",
+              file=sys.stderr)
         return
-    segs, cur = [], None
-    started = False
-    for line in out.splitlines():
-        if line.startswith("  #  RESIDUE"):
-            started = True; continue
-        if not started or len(line) < 17:
-            continue
-        ss = line[16]
-        try:
-            num = int(line[5:10])
-        except ValueError:
-            continue
-        if ss in "HGI":
+
+    st = load(cif_path)
+    with tempfile.TemporaryDirectory() as _tmp:
+        tmp = Path(_tmp)
+        pdb_tmp = tmp / "struct.pdb"
+        out_tmp = tmp / "dssp_out.txt"
+        script_tmp = tmp / "run_dssp.py"
+
+        st.write_pdb(str(pdb_tmp))
+
+        script_lines = [
+            f"pdb_path = {str(pdb_tmp)!r}",
+            f"out_path = {str(out_tmp)!r}",
+            "from chimerax.core.commands import run",
+            "run(session, 'open ' + pdb_path)",
+            "run(session, 'dssp')",
+            "lines = []",
+            "for m in session.models:",
+            "    for r in m.residues:",
+            "        if r.polymer_type == r.PT_AMINO:",
+            "            ss = 'H' if r.is_helix else ('S' if r.is_strand else 'C')",
+            "            lines.append(str(r.number) + ' ' + ss)",
+            "open(out_path, 'w').write('\\n'.join(lines))",
+            "run(session, 'exit')",
+        ]
+        script_tmp.write_text("\n".join(script_lines))
+
+        result = subprocess.run(
+            [chimerax, "--nogui", "--script", str(script_tmp)],
+            capture_output=True, text=True,
+        )
+        if not out_tmp.exists():
+            print(f"ChimeraX DSSP failed (exit {result.returncode}):\n{result.stderr}",
+                  file=sys.stderr)
+            return
+
+        ss_map: dict[int, str] = {}
+        for line in out_tmp.read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    ss_map[int(parts[0])] = parts[1]
+                except ValueError:
+                    continue
+
+    segs: list[tuple[int, int]] = []
+    cur: tuple[int, int] | None = None
+    for num in sorted(ss_map):
+        if ss_map[num] == "H":
             cur = (cur[0], num) if cur else (num, num)
         else:
             if cur:
-                segs.append(cur); cur = None
+                segs.append(cur)
+            cur = None
     if cur:
         segs.append(cur)
+
     print("# helical segments (label TM1..TM12; drop HA/HB and the ICD):")
     for i, (a, b) in enumerate(segs, 1):
         if b - a >= 12:
@@ -547,10 +601,12 @@ def main():
     p.add_argument("--outward-anchor", default="9UI1")
     p.add_argument("--inward-anchor", default="9UI6")
     p.add_argument("--annotate", help="run DSSP on a reference cif and exit")
+    p.add_argument("--chimerax-bin", default=None,
+                   help="path to ChimeraX executable (auto-detected if omitted)")
     args = p.parse_args()
     args.ref_files = {"GTR1": "9UI6", "NRT1.1": "4OH3"}
     if args.annotate:
-        annotate_reference(args.annotate); return
+        annotate_reference(args.annotate, chimerax_bin=args.chimerax_bin); return
     run(args)
 
 

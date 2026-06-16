@@ -56,20 +56,25 @@ templates:
       fallback:  ["4GBY", "4ZW9"]           # D — XylE / GLUT3 outward-occluded
 
     occluded_apo:
-      models:    ["GTR1_occluded-apo_repeat-swap"]   # genuinely thin bin
-      # consider: NarK occluded (nitrate transporter) — add code when identified
+      models:    ["GTR1_occluded-apo_repeat-swap"]   # no native NPF/POT apo-occluded exists
+      consider:  ["4U4W", "4IU9"]           # C — NarK occluded+nitrate (Waight 2015) / NarU occluded (Yan 2013, nitrate stripped)
+      fallback:  ["4JR9"]                   # C — NarK apo, 3-chain ASU (Zheng 2013 Nature)
 
     occluded_holo:
       pdb_codes: ["2XUT", "6RW3"]           # B (PepTSo occluded) + D (PfHT1 fully occluded)
-      # consider: NarK occluded — for nitrate-clade targets
+      consider:  ["4U4W", "4IU9"]           # C — NarK nitrate-bound occluded / NarU occluded
+      fallback:  ["4JRE"]                   # C — NarK nitrite-bound, 3-chain ASU (Zheng 2013 Nature)
 
     inward_occluded_holo:
       pdb_codes: ["2XUT", "4IKZ"]           # B — PepTSo / GkPOT+alafosfalin
-      consider:  ["9UIF", "9UIT"]           # A — GTR1 ligand-bound inward
+      consider:  ["9UIF", "9UIT", "4U4T"]  # A (GTR1 inward ligand-bound) + C (NarK inward+nitrate, Waight 2015)
+      fallback:  ["4JRE"]                   # C — NarK nitrite-bound (Zheng 2013 Nature)
 
     inward_open_apo:
       pdb_codes: ["9UI6", "4OH3", "7S8U"]   # A (GTR1) + A (NRT1.1) + B (HsPepT1)
-      consider:  ["23DA", "4UVM", "4IKV"]   # A (AtGTR1 Nan 2026) + B (PepTSo / GkPOT inward)
+      consider:  ["4UVM", "4IKV", "4U4V"]  # B (PepTSo / GkPOT inward-open) + C (NarK inward apo, Waight 2015)
+      fallback:  ["4JR9", "4IU8", "4IU9"]  # C — NarK apo (Zheng 2013) / NarU inward-open chain (Yan 2013)
+      # 23DA (AtGTR1 apo pH8, Nan/Li 2026) — HPUB, deposited 2026-02-01, add when released
 
 # ── Stage 4: Boltz-2 ─────────────────────────────────────────────────────────
 boltz:

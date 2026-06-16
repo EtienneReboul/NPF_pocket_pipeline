@@ -43,6 +43,8 @@ from pathlib import Path
 import gemmi
 import numpy as np
 
+TIP_WINDOW = 4   # Cα per helix-tip used for gate-distance sampling
+
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,14 @@ def helix_axis(ca_coords: np.ndarray) -> np.ndarray:
     centred = ca_coords - ca_coords.mean(axis=0)
     _, _, Vt = np.linalg.svd(centred, full_matrices=False)
     return Vt[0]   # first right-singular vector is the principal axis
+
+
+def helix_tip(ca: np.ndarray, n_terminal: bool) -> np.ndarray:
+    """First (n_terminal=True) or last TIP_WINDOW Cα of a residue-sorted array."""
+    n = min(TIP_WINDOW, len(ca))
+    if n == 0:
+        return np.empty((0, 3))
+    return ca[:n] if n_terminal else ca[-n:]
 
 
 def unsigned_angle(v1: np.ndarray, v2: np.ndarray) -> float:
@@ -114,6 +124,7 @@ RESULT_FIELDS = [
     "tm8_start", "tm8_end", "n_ca_tm8",
     "tm2_helix_frac", "tm8_helix_frac",
     "angle_deg",
+    "ext_gate_A", "int_gate_A",
     "n_tm_helices", "tool_used",
     "status",
 ]
@@ -235,8 +246,49 @@ def main():
     axis8  = helix_axis(ca_tm8)
     angle  = unsigned_angle(axis2, axis8)
 
+    # ── 5. Gate distances ─────────────────────────────────────────────────────
+    # NPF/MFS topology: N-terminus cytoplasmic (inside).
+    #   Even TM index (0,2,4,6,8,10) = IN→OUT: extracellular tip = LAST TIP_WINDOW Cα
+    #   Odd  TM index (1,3,5,7,9,11) = OUT→IN: extracellular tip = FIRST TIP_WINDOW Cα
+    # Extracellular gate: TM1(0) + TM2(1)  vs  TM7(6) + TM8(7)
+    # Intracellular gate: TM4(3) + TM5(4)  vs  TM10(9) + TM11(10)
+    ext_gate = float("nan")
+    int_gate = float("nan")
+    if n_tm >= 12:
+        def _ext_tip(i):
+            h = sorted_helices[i]
+            ca = get_ca_coords(model, chain_name, h["start"], h["end"])
+            return helix_tip(ca, n_terminal=(i % 2 == 1))  # odd→N-term=extracellular
+
+        def _int_tip(i):
+            h = sorted_helices[i]
+            ca = get_ca_coords(model, chain_name, h["start"], h["end"])
+            return helix_tip(ca, n_terminal=(i % 2 == 0))  # even→N-term=intracellular
+
+        def _tip_set(*idxs, fn):
+            parts = [t for i in idxs for t in (fn(i),) if len(t) > 0]
+            return np.vstack(parts) if parts else np.empty((0, 3))
+
+        nb_ext = _tip_set(0, 1, fn=_ext_tip)
+        cb_ext = _tip_set(6, 7, fn=_ext_tip)
+        nb_int = _tip_set(3, 4, fn=_int_tip)
+        cb_int = _tip_set(9, 10, fn=_int_tip)
+
+        if len(nb_ext) and len(cb_ext):
+            d = np.linalg.norm(nb_ext[:, None, :] - cb_ext[None, :, :], axis=-1)
+            ext_gate = round(float(d.min()), 3)
+        if len(nb_int) and len(cb_int):
+            d = np.linalg.norm(nb_int[:, None, :] - cb_int[None, :, :], axis=-1)
+            int_gate = round(float(d.min()), 3)
+
     status = "ok" if not dssp_flag else f"ok_with_flags:{dssp_flag}"
-    write_result(args.output, {**base, "angle_deg": round(angle, 3), "status": status})
+    write_result(args.output, {
+        **base,
+        "angle_deg":  round(angle, 3),
+        "ext_gate_A": ext_gate,
+        "int_gate_A": int_gate,
+        "status":     status,
+    })
 
     print(
         f"[tm_angle] {args.protein}/{args.conformation}/{args.sample_id}: "
@@ -244,7 +296,8 @@ def main():
         f"({len(ca_tm2)} Cα, helix={tm2_hfrac:.0%}), "
         f"TM8={tm8['start']}-{tm8['end']} "
         f"({len(ca_tm8)} Cα, helix={tm8_hfrac:.0%}), "
-        f"angle={angle:.1f}°, status={status}"
+        f"angle={angle:.1f}°  ext_gate={ext_gate:.1f}Å  int_gate={int_gate:.1f}Å  "
+        f"status={status}"
     )
 
 
