@@ -77,10 +77,10 @@ def main():
         print("[templates] Merging efflux pump templates.")
         for name, econf in EFFLUX_CONFORMATIONS.items():
             if name in conformations:
-                existing = set(conformations[name]["pdb_codes"])
+                existing = set(c.upper() for c in conformations[name].get("pdb_codes", []))
                 for code in econf["pdb_codes"]:
-                    if code not in existing:
-                        conformations[name]["pdb_codes"].append(code)
+                    if code.upper() not in existing:
+                        conformations[name].setdefault("pdb_codes", []).append(code)
             else:
                 conformations[name] = {"pdb_codes": list(econf["pdb_codes"])}
 
@@ -89,21 +89,38 @@ def main():
     for conf_name, conf in conformations.items():
         folder = root / conf_name
         folder.mkdir(parents=True, exist_ok=True)
-        codes  = list(dict.fromkeys(c.upper() for c in conf["pdb_codes"]))
 
-        print(f"\n── {conf_name}  ({len(codes)} structures)")
+        # Collect (code, tier_label) pairs from all three downloadable fields.
+        # `models` entries are homology/repeat-swap models — not on RCSB, skip them.
+        # Placeholder codes containing '<' or spaces are also skipped.
+        code_tiers: list[tuple[str, str]] = []
+        for field, label in (("pdb_codes", "primary"), ("consider", "consider"), ("fallback", "fallback")):
+            for raw in conf.get(field, []):
+                code = raw.strip()
+                if not code or "<" in code or " " in code:
+                    continue   # placeholder — no RCSB entry
+                code_tiers.append((code.upper(), label))
+        # deduplicate while preserving order
+        seen: set[str] = set()
+        unique: list[tuple[str, str]] = []
+        for code, label in code_tiers:
+            if code not in seen:
+                seen.add(code)
+                unique.append((code, label))
+
+        print(f"\n── {conf_name}  ({len(unique)} structures)")
         if args.dry_run:
-            for code in codes:
-                print(f"    [dry-run] {code}")
+            for code, label in unique:
+                print(f"    [dry-run] {code}  [{label}]")
             continue
 
-        for code in codes:
+        for code, label in unique:
             dest = folder / f"{code}.cif"
             if dest.exists():
-                print(f"    + {code}: already present")
+                print(f"    + {code}: already present  [{label}]")
                 total_skip += 1
                 continue
-            print(f"    ↓ {code} ...", end=" ", flush=True)
+            print(f"    ↓ {code} [{label}] ...", end=" ", flush=True)
             if download_cif(code, dest):
                 print(f"done ({dest.stat().st_size // 1024} KB)")
                 total_ok += 1

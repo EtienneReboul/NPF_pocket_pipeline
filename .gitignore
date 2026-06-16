@@ -42,3 +42,5 @@ build/
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb
+
+HANDOFF*.md

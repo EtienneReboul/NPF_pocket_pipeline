@@ -47,17 +47,29 @@ templates:
   # Folder names containing "apo"  → protein only.
   conformations:
     outward_open_apo:
-      pdb_codes: ["6N3I", "4YBQ", "5C65", "4ZWC", "3O7Q"]
-    occluded_apo:
-      pdb_codes: ["2GFP"]
-    inward_open_apo:
-      pdb_codes: ["4YB9", "4PYP", "5EQI", "5EQH", "5EQG", "4JA4"]
-    occluded_holo:
-      pdb_codes: ["4OH3", "6RW3"]
+      pdb_codes: ["9UI1"]                   # A — GTR1 outward-apo (Yan 2026), primary anchor
+      consider:  ["7PN1"]                   # B — HsPepT1 outward-open (POT)
+      fallback:  ["4YBQ", "3O7Q"]           # D — GLUT5 / FucP, per-bundle align
+
     outward_occluded_holo:
-      pdb_codes: ["4GBZ", "4GBY", "4ZWB", "4ZW9"]
+      models:    ["GTR1_out-occluded_repeat-swap"]   # no native NPF/POT exists yet
+      fallback:  ["4GBY", "4ZW9"]           # D — XylE / GLUT3 outward-occluded
+
+    occluded_apo:
+      models:    ["GTR1_occluded-apo_repeat-swap"]   # genuinely thin bin
+      # consider: NarK occluded (nitrate transporter) — add code when identified
+
+    occluded_holo:
+      pdb_codes: ["2XUT", "6RW3"]           # B (PepTSo occluded) + D (PfHT1 fully occluded)
+      # consider: NarK occluded — for nitrate-clade targets
+
     inward_occluded_holo:
-      pdb_codes: ["4JA3", "2XUT"]
+      pdb_codes: ["2XUT", "4IKZ"]           # B — PepTSo / GkPOT+alafosfalin
+      consider:  ["9UIF", "9UIT"]           # A — GTR1 ligand-bound inward
+
+    inward_open_apo:
+      pdb_codes: ["9UI6", "4OH3", "7S8U"]   # A (GTR1) + A (NRT1.1) + B (HsPepT1)
+      consider:  ["23DA", "4UVM", "4IKV"]   # A (AtGTR1 Nan 2026) + B (PepTSo / GkPOT inward)
 
 # ── Stage 4: Boltz-2 ─────────────────────────────────────────────────────────
 boltz:
