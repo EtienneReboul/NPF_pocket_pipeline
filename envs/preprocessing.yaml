@@ -1,0 +1,10 @@
+name: preprocessing
+# Minimal env for Boltz-2 input YAML generation (make_boltz_input.py)
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pyyaml>=6.0
+  - biopython>=1.83
+  - requests>=2.31    # download_templates.py

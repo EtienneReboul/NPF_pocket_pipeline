@@ -19,9 +19,14 @@ Usage:
 import json
 from pathlib import Path
 
+
 configfile: "config.yaml"
+
+
 if Path("config.local.yaml").exists():
+
     configfile: "config.local.yaml"
+
 
 # Validate email
 _email = config.get("interproscan", {}).get("email", "")
@@ -36,17 +41,17 @@ if _email in ("", "your@email.com", "firstname.lastname@institution.fr"):
     )
 
 # ── Directory shortcuts ────────────────────────────────────────────────────────
-DIRS         = config["dirs"]
-FASTA_DIR    = Path(DIRS["fasta"])
-MSA_DIR      = Path(DIRS["msa"])
+DIRS = config["dirs"]
+FASTA_DIR = Path(DIRS["fasta"])
+MSA_DIR = Path(DIRS["msa"])
 INTERPRO_DIR = Path(DIRS["interpro"])
-TMPL_DIR     = Path(DIRS["templates"])
+TMPL_DIR = Path(DIRS["templates"])
 BOLTZ_IN_DIR = Path(DIRS["boltz_in"])
-LOG_DIR      = Path(DIRS["logs"])
-BOLTZ_CFG    = config["boltz"]
+LOG_DIR = Path(DIRS["logs"])
+BOLTZ_CFG = config["boltz"]
 CONFORMATIONS = list(config["templates"]["conformations"].keys())
 
-MSA_SENTINEL  = MSA_DIR / "msa.done"
+MSA_SENTINEL = MSA_DIR / "msa.done"
 IPRO_SENTINEL = INTERPRO_DIR / "interproscan.done"
 TMPL_SENTINEL = TMPL_DIR / "templates.done"
 
@@ -62,37 +67,38 @@ def read_proteins(sentinel_path):
 # STAGE 1: MSA (checkpoint — discovers protein list)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 checkpoint msa_checkpoint:
     output:
-        sentinel = str(MSA_SENTINEL),
-    params:
-        fasta_dir    = str(FASTA_DIR),
-        a3m_dir      = str(MSA_DIR / "a3m"),
-        pdb_dir      = str(MSA_DIR / "pdb"),
-        sh_dir       = str(MSA_DIR / "sh"),
-        query        = config["uniprot"]["query"],
-        size         = config["uniprot"]["size"],
-        delay        = config["colabfold"]["delay"],
-        retries      = config["colabfold"]["max_retries"],
-        poll_int     = config["colabfold"]["poll_interval"],
-        poll_timeout = config["colabfold"]["poll_timeout"],
+        sentinel=str(MSA_SENTINEL),
     log:
         str(LOG_DIR / "msa.log"),
+    params:
+        fasta_dir=str(FASTA_DIR),
+        a3m_dir=str(MSA_DIR / "a3m"),
+        pdb_dir=str(MSA_DIR / "pdb"),
+        sh_dir=str(MSA_DIR / "sh"),
+        query=config["uniprot"]["query"],
+        size=config["uniprot"]["size"],
+        delay=config["colabfold"]["delay"],
+        retries=config["colabfold"]["max_retries"],
+        poll_int=config["colabfold"]["poll_interval"],
+        poll_timeout=config["colabfold"]["poll_timeout"],
     shell:
         """
         python scripts/run_msa.py \\
-            --fasta-dir     {params.fasta_dir} \\
-            --a3m-dir       {params.a3m_dir} \\
-            --pdb-dir       {params.pdb_dir} \\
-            --sh-dir        {params.sh_dir} \\
-            --sentinel      {output.sentinel} \\
-            --query         '{params.query}' \\
-            --size          {params.size} \\
-            --delay         {params.delay} \\
-            --retries       {params.retries} \\
-            --poll-interval {params.poll_int} \\
-            --poll-timeout  {params.poll_timeout} \\
-        > {log} 2>&1
+        --fasta-dir {params.fasta_dir} \\
+        --a3m-dir {params.a3m_dir} \\
+        --pdb-dir {params.pdb_dir} \\
+        --sh-dir {params.sh_dir} \\
+        --sentinel {output.sentinel} \\
+        --query '{params.query}' \\
+        --size {params.size} \\
+        --delay {params.delay} \\
+        --retries {params.retries} \\
+        --poll-interval {params.poll_int} \\
+        --poll-timeout {params.poll_timeout} \\
+        >{log} 2>&1
         """
 
 
@@ -100,32 +106,33 @@ checkpoint msa_checkpoint:
 # STAGE 2: InterProScan
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 rule run_interproscan:
     input:
-        fasta    = str(FASTA_DIR / "npf_arabidopsis.fasta"),
-        msa_done = str(MSA_SENTINEL),
+        fasta=str(FASTA_DIR / "npf_arabidopsis.fasta"),
+        msa_done=str(MSA_SENTINEL),
     output:
-        sentinel = str(IPRO_SENTINEL),
-        summary  = str(INTERPRO_DIR / "cdd_summary.json"),
-    params:
-        out_dir      = str(INTERPRO_DIR),
-        email        = config["interproscan"]["email"],
-        accessions   = " ".join(config["interproscan"]["cdd_accessions"]),
-        poll_int     = config["interproscan"]["poll_interval"],
-        poll_timeout = config["interproscan"]["poll_timeout"],
+        sentinel=str(IPRO_SENTINEL),
+        summary=str(INTERPRO_DIR / "cdd_summary.json"),
     log:
         str(LOG_DIR / "interproscan.log"),
+    params:
+        out_dir=str(INTERPRO_DIR),
+        email=config["interproscan"]["email"],
+        accessions=" ".join(config["interproscan"]["cdd_accessions"]),
+        poll_int=config["interproscan"]["poll_interval"],
+        poll_timeout=config["interproscan"]["poll_timeout"],
     shell:
         """
         python scripts/run_interproscan.py \\
-            --fasta         {input.fasta} \\
-            --out-dir       {params.out_dir} \\
-            --email         {params.email} \\
-            --accessions    {params.accessions} \\
-            --sentinel      {output.sentinel} \\
-            --poll-interval {params.poll_int} \\
-            --poll-timeout  {params.poll_timeout} \\
-        > {log} 2>&1
+        --fasta {input.fasta} \\
+        --out-dir {params.out_dir} \\
+        --email {params.email} \\
+        --accessions {params.accessions} \\
+        --sentinel {output.sentinel} \\
+        --poll-interval {params.poll_int} \\
+        --poll-timeout {params.poll_timeout} \\
+        >{log} 2>&1
         """
 
 
@@ -133,20 +140,24 @@ rule run_interproscan:
 # STAGE 3: Template download
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 rule download_templates:
     output:
-        sentinel = str(TMPL_SENTINEL),
-    params:
-        templates_root = str(TMPL_DIR),
+        sentinel=str(TMPL_SENTINEL),
     log:
         str(LOG_DIR / "download_templates.log"),
+    conda:
+        "../../envs/preprocessing.yaml"
+    params:
+        templates_root=str(TMPL_DIR),
     shell:
         """
         python scripts/download_templates.py \\
-            --config         config.yaml \\
-            --templates-root {params.templates_root} \\
-            --sentinel       {output.sentinel} \\
-        > {log} 2>&1
+        --config config.yaml \\
+        --templates-root {params.templates_root} \\
+        --sentinel {output.sentinel} \\
+        --prune \\
+        >{log} 2>&1
         """
 
 
@@ -154,45 +165,49 @@ rule download_templates:
 # STAGE 4: Prepare Boltz-2 input YAML
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 rule prepare_boltz_input:
     input:
-        fasta       = str(FASTA_DIR / "{protein}.fasta"),
-        a3m         = str(MSA_DIR / "a3m" / "{protein}.a3m"),
-        cdd_summary = str(INTERPRO_DIR / "cdd_summary.json"),
-        tmpl_done   = str(TMPL_SENTINEL),
+        fasta=str(FASTA_DIR / "{protein}.fasta"),
+        a3m=str(MSA_DIR / "a3m" / "{protein}.a3m"),
+        cdd_summary=str(INTERPRO_DIR / "cdd_summary.json"),
+        tmpl_done=str(TMPL_SENTINEL),
     output:
-        yaml = str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
-    params:
-        templates_dir       = str(TMPL_DIR / "{conformation}"),
-        ligand_smiles       = BOLTZ_CFG["ligand_smiles"],
-        ligand_entity_id    = BOLTZ_CFG["ligand_entity_id"],
-        protein_entity_id   = BOLTZ_CFG["protein_entity_id"],
-        pocket_max_distance = BOLTZ_CFG["pocket_max_distance"],
-        pocket_force        = str(BOLTZ_CFG["pocket_force"]).lower(),
+        yaml=str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
     log:
         str(LOG_DIR / "boltz_input" / "{protein}" / "{conformation}.log"),
+    conda:
+        "../../envs/preprocessing.yaml"
+    params:
+        templates_dir=str(TMPL_DIR / "{conformation}"),
+        ligand_smiles=BOLTZ_CFG["ligand_smiles"],
+        ligand_entity_id=BOLTZ_CFG["ligand_entity_id"],
+        protein_entity_id=BOLTZ_CFG["protein_entity_id"],
+        pocket_max_distance=BOLTZ_CFG["pocket_max_distance"],
+        pocket_force=str(BOLTZ_CFG["pocket_force"]).lower(),
     shell:
         """
         python scripts/make_boltz_input.py \\
-            --fasta               {input.fasta} \\
-            --a3m                 {input.a3m} \\
-            --cdd-summary         {input.cdd_summary} \\
-            --protein-name        {wildcards.protein} \\
-            --templates-dir       {params.templates_dir} \\
-            --conformation        {wildcards.conformation} \\
-            --output              {output.yaml} \\
-            --ligand-smiles       '{params.ligand_smiles}' \\
-            --ligand-entity-id    {params.ligand_entity_id} \\
-            --protein-entity-id   {params.protein_entity_id} \\
-            --pocket-max-distance {params.pocket_max_distance} \\
-            --pocket-force        {params.pocket_force} \\
-        > {log} 2>&1
+        --fasta {input.fasta} \\
+        --a3m {input.a3m} \\
+        --cdd-summary {input.cdd_summary} \\
+        --protein-name {wildcards.protein} \\
+        --templates-dir {params.templates_dir} \\
+        --conformation {wildcards.conformation} \\
+        --output {output.yaml} \\
+        --ligand-smiles '{params.ligand_smiles}' \\
+        --ligand-entity-id {params.ligand_entity_id} \\
+        --protein-entity-id {params.protein_entity_id} \\
+        --pocket-max-distance {params.pocket_max_distance} \\
+        --pocket-force {params.pocket_force} \\
+        >{log} 2>&1
         """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RULE ALL — preprocess target
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def all_preprocess_targets(wildcards):
     """
@@ -211,4 +226,4 @@ def all_preprocess_targets(wildcards):
 rule all:
     default_target: True
     input:
-        all_preprocess_targets
+        all_preprocess_targets,

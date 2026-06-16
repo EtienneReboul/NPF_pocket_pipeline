@@ -41,6 +41,8 @@ def parse_args():
     p.add_argument("--templates-root",  required=True)
     p.add_argument("--sentinel",        required=True)
     p.add_argument("--efflux-templates", action="store_true")
+    p.add_argument("--prune",           action="store_true",
+                   help="Remove .cif files not in the current config (keeps folders in sync)")
     p.add_argument("--dry-run", "-n",   action="store_true")
     return p.parse_args()
 
@@ -128,6 +130,26 @@ def main():
                 total_fail += 1
 
     print(f"\n[templates] {total_ok} downloaded, {total_skip} skipped, {total_fail} failed.")
+
+    # ── Prune stale CIF files not in current config ───────────────────────────
+    if args.prune and not args.dry_run:
+        total_pruned = 0
+        for conf_name, conf in conformations.items():
+            folder = root / conf_name
+            if not folder.exists():
+                continue
+            current_codes: set[str] = set()
+            for field in ("pdb_codes", "consider", "fallback"):
+                for raw in conf.get(field, []):
+                    code = raw.strip().upper()
+                    if code and "<" not in code and " " not in code:
+                        current_codes.add(code)
+            for cif in sorted(folder.glob("*.cif")):
+                if cif.stem.upper() not in current_codes:
+                    print(f"  [prune] {conf_name}/{cif.name}")
+                    cif.unlink()
+                    total_pruned += 1
+        print(f"[templates] Pruned {total_pruned} stale template file(s).")
 
     if not args.dry_run:
         sentinel = Path(args.sentinel)
