@@ -123,4 +123,5 @@ dirs:
   dssp:       "results/dssp"              # ChimeraX DSSP JSON per sample
   tm_angles:  "results/tm_angles"         # TM2/TM8 angle CSVs per sample + conformation
   gmm:        "results/gmm"               # GMM report, plots, BIC comparison
+  reannotated: "results/reannotated"     # CIF symlinks reorganised by GMM conformation
   logs:       "logs"

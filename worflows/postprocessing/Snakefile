@@ -1,16 +1,26 @@
 """
-Snakefile_postprocess — Stages 6–13
+Snakefile_postprocess — Stages 6–14
 =====================================
 Run locally (Mac / workstation) after Boltz-2 has completed on the cluster.
 
-  6.  ChimeraX    — energy minimization, CIF → PDB
-  7.  PLIP         — protein–ligand interaction profiling via Docker
-  8.  pliparser    — PLIP report → CSV + ChimeraX .cxc
-  9.  Aggregate    — merge per-sample CSVs (one summary per protein × conformation)
+Pipeline order
+--------------
+  Phase A — conformational annotation (reads raw Boltz-2 CIFs):
   10. DSSP         — ChimeraX DSSP on raw Boltz-2 CIF (TM helix sanity check)
   11. tm_angle     — TM2/TM8 helix axis angle per sample
   12. collect_angles — merge per-sample angles (one CSV per protein × conformation)
-  13. gmm_analysis — fit 3- and 6-component GMMs, compare by BIC
+  13. gmm_analysis — BIC sweep k=1-10 + GMM-3/6 fit
+  14. reannotate   — reorganise CIFs into <protein>/<gmm_conformation>/ by GMM assignment
+
+  Phase B — structural analysis (reads reannotated CIFs):
+  6.  sanitize_cif — split protein/ligand, normalise ligand
+  6b. minimize_cif — ChimeraX energy minimisation, CIF → PDB
+  7.  PLIP         — protein–ligand interaction profiling via Docker
+  8.  pliparser    — PLIP report → CSV + ChimeraX .cxc
+  9.  aggregate    — merge per-sample CSVs (one summary per protein × gmm_conformation)
+
+  Phase B is fed by REANN_JOBS, which is populated by globbing results/reannotated/.
+  On a fresh run, execute Phase A first, then re-run Snakemake for Phase B.
 
 Prerequisites:
   - Snakefile_preprocess completed (stages 1–4)
@@ -39,6 +49,7 @@ INTERPRO_DIR = Path(DIRS["interpro"])
 DSSP_DIR     = Path(DIRS["dssp"])
 TM_ANG_DIR   = Path(DIRS["tm_angles"])
 GMM_DIR      = Path(DIRS["gmm"])
+REANN_DIR    = Path(DIRS.get("reannotated", "results/reannotated"))
 LOG_DIR      = Path(DIRS["logs"])
 
 FASTA_DIR    = Path(DIRS["fasta"])
@@ -106,44 +117,66 @@ def cif_path_for_sample(protein, conformation, sample_id):
     )
 
 
-# ── Build the complete target list upfront ────────────────────────────────────
-# Since all Boltz-2 outputs exist on disk, we can enumerate everything now.
+# ── Phase A jobs: from raw Boltz-2 output ─────────────────────────────────────
+# Used for DSSP, TM angles, GMM, and reannotation.
 
-TARGETS = []     # final aggregate CSV + per-sample CXC scripts
 ALL_JOBS = {}    # (protein, conformation) → [sample_id, ...]
 
 for protein in PROTEINS:
     for conformation in CONFORMATIONS:
         done_file = BOLTZ_OUT / protein / conformation / "prediction.done"
         if not done_file.exists():
-            continue   # skip proteins that haven't been predicted yet
-
+            continue
         sample_ids = discover_sample_ids(protein, conformation)
         if not sample_ids:
             print(f"[postprocess] WARNING: no CIFs for {protein}/{conformation} — skipping")
             continue
-
         ALL_JOBS[(protein, conformation)] = sample_ids
-        # aggregate CSV (one per protein × conformation)
-        TARGETS.append(
-            str(PLIP_DIR / protein / conformation / "summary.csv")
-        )
-        # per-conformation angle CSV (stages 10–12)
-        TARGETS.append(
-            str(TM_ANG_DIR / protein / conformation / "angles.csv")
-        )
-        # ChimeraX visualization scripts (one per sample)
-        for sid in sample_ids:
-            TARGETS.append(
-                str(PLIP_DIR / protein / conformation / sid
-                    / "model_minimized_report" / "interaction.cxc")
-            )
 
-# GMM report is global across all protein × conformation combos (stage 13)
+
+# ── Phase B jobs: from reannotated directory ───────────────────────────────────
+# Populated by globbing results/reannotated/ after Phase A has run.
+# Empty on a fresh start — Phase B targets are simply omitted until reannotation exists.
+
+REANN_JOBS = {}  # (protein, gmm_conformation) → [orig_conformation__sample_id, ...]
+
+for _pdir in sorted(REANN_DIR.glob("*/")):
+    _protein = _pdir.name
+    if _protein in ("reannotation.done", "reannotation_summary.csv"):
+        continue
+    for _cdir in sorted(_pdir.glob("*/")):
+        _gmm_conf = _cdir.name
+        _sids = sorted(c.stem for c in _cdir.glob("*.cif"))
+        if _sids:
+            REANN_JOBS[(_protein, _gmm_conf)] = _sids
+
+
+# ── Target list ───────────────────────────────────────────────────────────────
+
+TARGETS = []
+
+# Phase A targets (angle CSVs — one per original protein × conformation)
+for protein, conformation in ALL_JOBS:
+    TARGETS.append(str(TM_ANG_DIR / protein / conformation / "angles.csv"))
+
+# GMM + reannotation
 if ALL_JOBS:
     TARGETS.append(str(GMM_DIR / "gmm_report.json"))
+    TARGETS.append(str(REANN_DIR / "reannotation.done"))
 
-print(f"[postprocess] {len(ALL_JOBS)} protein × conformation combos, {len(TARGETS)} targets.")
+# Phase B targets (sanitize → minimize → PLIP — one per reannotated protein × gmm_conformation)
+for (protein, gmm_conf), sample_ids in REANN_JOBS.items():
+    TARGETS.append(str(PLIP_DIR / protein / gmm_conf / "summary.csv"))
+    for sid in sample_ids:
+        TARGETS.append(
+            str(PLIP_DIR / protein / gmm_conf / sid / "model_minimized_report" / "interaction.cxc")
+        )
+
+print(
+    f"[postprocess] Phase A: {len(ALL_JOBS)} boltz combos | "
+    f"Phase B: {len(REANN_JOBS)} reannotated combos | "
+    f"{len(TARGETS)} total targets."
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,7 +185,7 @@ print(f"[postprocess] {len(ALL_JOBS)} protein × conformation combos, {len(TARGE
 
 rule sanitize_cif:
     input:
-        cif = lambda wc: cif_path_for_sample(wc.protein, wc.conformation, wc.sample_id),
+        cif = str(REANN_DIR / "{protein}" / "{conformation}" / "{sample_id}.cif"),
     output:
         pdb = str(SANITIZED_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_sanitized.pdb"),
     log:
@@ -329,8 +362,8 @@ rule csv_to_cxc:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def summaries_for_protein_conformation(wildcards):
-    """Return all per-sample summary CSVs for one protein × conformation."""
-    sample_ids = ALL_JOBS.get((wildcards.protein, wildcards.conformation), [])
+    """Return all per-sample summary CSVs for one protein × gmm_conformation."""
+    sample_ids = REANN_JOBS.get((wildcards.protein, wildcards.conformation), [])
     return [
         str(
             PLIP_DIR / wildcards.protein / wildcards.conformation
@@ -479,8 +512,9 @@ rule gmm_analysis:
     input:
         csvs = all_angle_csv_inputs,
     output:
-        sentinel = str(GMM_DIR / "gmm.done"),
-        report   = str(GMM_DIR / "gmm_report.json"),
+        sentinel    = str(GMM_DIR / "gmm.done"),
+        report      = str(GMM_DIR / "gmm_report.json"),
+        assignments = str(GMM_DIR / "angles_with_assignments.csv"),
     params:
         out_dir = str(GMM_DIR),
         n_init  = GMM_CFG["n_init"],
@@ -495,6 +529,31 @@ rule gmm_analysis:
             --output-dir {params.out_dir} \\
             --sentinel   {output.sentinel} \\
             --n-init     {params.n_init} \\
+        > {log} 2>&1
+        """
+
+
+rule reannotate_conformations:
+    input:
+        assignments = str(GMM_DIR / "angles_with_assignments.csv"),
+        report      = str(GMM_DIR / "gmm_report.json"),
+    output:
+        sentinel = str(REANN_DIR / "reannotation.done"),
+    params:
+        boltz_out  = str(BOLTZ_OUT),
+        output_dir = str(REANN_DIR),
+    log:
+        str(LOG_DIR / "reannotate_conformations.log"),
+    conda:
+        "../../envs/aggregate.yaml"
+    shell:
+        """
+        python scripts/reannotate_conformations.py \\
+            --assignments  {input.assignments} \\
+            --report       {input.report} \\
+            --boltz-out    {params.boltz_out} \\
+            --output-dir   {params.output_dir} \\
+            --sentinel     {output.sentinel} \\
         > {log} 2>&1
         """
 

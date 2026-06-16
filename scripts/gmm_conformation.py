@@ -300,8 +300,13 @@ def main():
     # ── Per-sample assignments ────────────────────────────────────────────────
     df_valid["gmm3_component"] = gmm3.predict(X)
     df_valid["gmm6_component"] = gmm6.predict(X)
+    df_valid["gmm_best_component"] = gmm_by_k[best_k].predict(X)
     # Re-label components by ascending mean so 0 = lowest angle
-    for col, gmm in [("gmm3_component", gmm3), ("gmm6_component", gmm6)]:
+    for col, gmm in [
+        ("gmm3_component", gmm3),
+        ("gmm6_component", gmm6),
+        ("gmm_best_component", gmm_by_k[best_k]),
+    ]:
         rank_map = {old: new for new, old in enumerate(np.argsort(gmm.means_.flatten()))}
         df_valid[col] = df_valid[col].map(rank_map)
     df_valid.to_csv(out_dir / "angles_with_assignments.csv", index=False)
