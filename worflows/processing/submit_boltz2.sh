@@ -228,6 +228,22 @@ TASK_ID=\$SLURM_ARRAY_TASK_ID
 BATCH_SIZE=$BATCH_SIZE
 MANIFEST="$MANIFEST"
 
+# Suppress noisy but harmless deprecation warnings from lightning / torch
+export PYTHONWARNINGS="ignore::DeprecationWarning,ignore::FutureWarning"
+
+# Write a thin wrapper that sets float32 matmul precision before boltz runs.
+# torch.set_float32_matmul_precision must be called before the model loads;
+# there is no environment-variable equivalent, so a wrapper is the only option.
+# 'high' tells cuBLAS to use TF32 on Tensor Cores (L40S, A100, H100) for
+# float32 matmuls — roughly 8× faster than full float32, negligible accuracy loss.
+BOLTZ_WRAPPER=\$(mktemp /tmp/boltz_wrapper_XXXX.py)
+cat > "\$BOLTZ_WRAPPER" << 'WRAPPER'
+import torch
+torch.set_float32_matmul_precision("high")
+from boltz.main import cli
+cli()
+WRAPPER
+
 echo "[\$(date)] Array task \$TASK_ID — batch size $BATCH_SIZE"
 echo "  Manifest: \$MANIFEST"
 
@@ -259,19 +275,21 @@ while IFS='|' read -r yaml out_dir done_file; do
 
     echo "[\$(date)] START: \$protein / \$conf"
 
-    boltz predict \\
+    python "\$BOLTZ_WRAPPER" predict \\
         "\$yaml" \\
         --out_dir "\$out_dir" \\
         --recycling_steps $RECYCLING_STEPS \\
         --diffusion_samples $DIFFUSION_SAMPLES \\
         --output_format $OUTPUT_FORMAT
-    # --no_kernels  ← uncomment for V100S or CPU; not needed for A100
+    # --no_kernels  ← uncomment for V100S or CPU; not needed for L40S/A100
 
     echo "\$(date): prediction finished" > "\$done_file"
     echo "[\$(date)] DONE:  \$protein / \$conf"
     echo ""
 
 done < <(sed -n "\${LINE_START},\${LINE_END}p" "\$MANIFEST")
+
+rm -f "\$BOLTZ_WRAPPER"
 
 echo "[\$(date)] Array task \$TASK_ID complete."
 SLURM_SCRIPT
