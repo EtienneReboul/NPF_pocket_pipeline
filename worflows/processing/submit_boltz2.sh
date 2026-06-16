@@ -24,10 +24,14 @@
 #   bash submit_boltz2.sh --test                            # submit task 0 only (QoS-safe test)
 #   bash submit_boltz2.sh --batch-size 20                   # predictions per task
 #   bash submit_boltz2.sh --max-concurrent 10               # max parallel tasks
-#   bash submit_boltz2.sh --gres gpu:3g.20gb:1              # IFB A100 20GB slice
-#   bash submit_boltz2.sh --gres gpu:7g.40gb:1              # IFB A100 full 40GB
+#   bash submit_boltz2.sh --gres gpu:l40s:1                 # L40S (default, recommended)
+#   bash submit_boltz2.sh --gres gpu:7g.40gb:1              # A100 full — ONLY if driver ≥575
 #   bash submit_boltz2.sh --gres gpu:tesla:1                # V100S
-#   bash submit_boltz2.sh --test --gres gpu:3g.20gb:1       # test on IFB
+#   bash submit_boltz2.sh --test --gres gpu:l40s:1          # test on L40S
+#
+# GPU COMPATIBILITY NOTE (boltz2 env uses PyTorch 2.12.0+cu130, requires CUDA 13.0):
+#   L40S nodes  — driver 580 ✓  (verified 2026-06-16)
+#   A100 nodes  — driver ~520 ✗  crashes at inference (CUDA 12.2 max, too old)
 #   bash submit_boltz2.sh --batch-size 20 --max-concurrent 5 --dry-run
 #
 # The script is idempotent: predictions with prediction.done are skipped.
@@ -53,7 +57,10 @@ MAX_CONCURRENT=10   # max array tasks running at once (SLURM % syntax)
 PARTITION="gpu"
 CPUS=8
 MEM="64G"
-GRES="gpu:3g.20gb:1"   # IFB A100 20GB MIG — override with --gres
+# IMPORTANT: must target L40S (driver 580, CUDA 13.0 compatible).
+# A100 nodes on this cluster run driver ~520 (CUDA 12.2 max) and crash with
+# the boltz2 env (PyTorch 2.12.0+cu130). L40S nodes have driver 580 and work.
+GRES="gpu:l40s:1"
 TIME=240                # minutes per task
 ACCOUNT=""
 

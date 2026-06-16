@@ -172,17 +172,14 @@ ssh username@your_cluster
 cd path/to/projects
 
 # 3. On the cluster — dry-run first to check the plan
-#    The submission script accepts `--gres <gpu_profile>` to override the
-#    default GPU resource setting in `submit_boltz2.sh` (see top of script).
-#    Examples: `--gres gpu:3g.20gb:1` (MIG/A100 slice), `--gres gpu:7g.40gb:1` (A100 full).
-bash submit_boltz2.sh --dry-run
-# or dry-run with explicit GPU profile:
-bash submit_boltz2.sh --gres gpu:7g.40gb:1 --dry-run
+#    GPU requirement: boltz2 env uses PyTorch 2.12.0+cu130 (CUDA 13.0).
+#    L40S nodes have driver 580 (CUDA 13.0 ✓). A100 nodes have driver ~520
+#    (CUDA 12.2 ✗ — crashes at inference). Always use L40S or verify driver ≥575.
+bash submit_boltz2.sh --dry-run                      # uses gpu:l40s:1 by default
 
-# 4. Submit all jobs (optionally set GPU profile)
-bash submit_boltz2.sh
-# or submit with a specific GPU profile:
-bash submit_boltz2.sh --gres gpu:7g.40gb:1
+# 4. Submit all jobs
+bash submit_boltz2.sh                                # default: L40S, max-concurrent 1
+bash submit_boltz2.sh --max-concurrent 2             # if QoS allows 2 GPU slots
 
 # 5. Monitor
 squeue -u $USER
@@ -278,13 +275,14 @@ results/
 
 ## Troubleshooting
 
-| Symptom                           | Fix                                                                      |
-|-----------------------------------|--------------------------------------------------------------------------|
-| `No cd174xx match` for a protein  | Check InterProScan JSON; protein may be unannotated in CDD               |
-| `No .cif files` in templates dir  | Check `data/templates/templates.done`; rerun `download_templates`        |
-| ChimeraX segfault                 | Verify `chimerax_bin` path; test with `chimerax --nogui --exit`          |
-| Docker permission error           | Ensure Docker Desktop is running                                         |
-| Boltz-2 OOM on CPU                | Reduce `diffusion_samples` or `recycling_steps` in `config.yaml`         |
-| PLIP segfault (exit 139)          | Check PDB backbone; enable `fix_pdb` step if needed                      |
-| Missing email error on startup    | Run `cp config.local.yaml.example config.local.yaml` and set your email  |
-| Post-processing finds no targets  | Check `data/msa/msa.done` exists and `results/boltz/` was transferred    |
+| Symptom                                   | Fix                                                                                                          |
+|-------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `No cd174xx match` for a protein          | Check InterProScan JSON; protein may be unannotated in CDD                                                   |
+| `No .cif files` in templates dir          | Check `data/templates/templates.done`; rerun `download_templates`                                            |
+| ChimeraX segfault                         | Verify `chimerax_bin` path; test with `chimerax --nogui --exit`                                              |
+| Docker permission error                   | Ensure Docker Desktop is running                                                                             |
+| Boltz-2 OOM on CPU                        | Reduce `diffusion_samples` or `recycling_steps` in `config.yaml`                                             |
+| Boltz-2 crashes: `NVIDIA driver too old`  | boltz2 env requires CUDA 13.0 (driver ≥575). Use `--gres gpu:l40s:1`; A100 nodes have driver ~520 (too old)  |
+| PLIP segfault (exit 139)                  | Check PDB backbone; enable `fix_pdb` step if needed                                                          |
+| Missing email error on startup            | Run `cp config.local.yaml.example config.local.yaml` and set your email                                      |
+| Post-processing finds no targets          | Check `data/msa/msa.done` exists and `results/boltz/` was transferred                                        |
