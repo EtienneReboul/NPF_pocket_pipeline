@@ -11,6 +11,7 @@ data/boltz_inputs/
 results/
 results_03_06_2026/
 logs/
+notebook/
 
 # ── Snakemake internals ───────────────────────────────────────────────────────
 .snakemake/

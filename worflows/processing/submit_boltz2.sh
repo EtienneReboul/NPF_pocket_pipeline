@@ -46,11 +46,11 @@ CONDA_ENV="boltz2"
 
 # Boltz-2 parameters (match config.yaml)
 RECYCLING_STEPS=3
-DIFFUSION_SAMPLES=5
+DIFFUSION_SAMPLES=50
 OUTPUT_FORMAT="mmcif"
 
 # Batching
-BATCH_SIZE=20       # predictions per array task (~8 min each on A100 → 160 min/task)
+BATCH_SIZE=10       # predictions per array task (50 samples/pred → ~80 min/task on L40S)
 MAX_CONCURRENT=10   # max array tasks running at once (SLURM % syntax)
 
 # SLURM resources (per array task)
@@ -84,12 +84,17 @@ while [[ $# -gt 0 ]]; do
             MAX_CONCURRENT="$2"; shift 2 ;;
         --max-concurrent=*)
             MAX_CONCURRENT="${1#--max-concurrent=}"; shift ;;
+        --diffusion-samples)
+            DIFFUSION_SAMPLES="$2"; shift 2 ;;
+        --diffusion-samples=*)
+            DIFFUSION_SAMPLES="${1#--diffusion-samples=}"; shift ;;
         --test)
             TEST_MODE=true; shift ;;
         *)
             echo "ERROR: unknown argument '$1'"
             echo "Usage: bash submit_boltz2.sh [--dry-run] [--test] [--gres <profile>]"
             echo "                             [--batch-size N] [--max-concurrent N]"
+            echo "                             [--diffusion-samples N]"
             exit 1 ;;
     esac
 done

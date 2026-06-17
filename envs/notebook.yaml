@@ -1,0 +1,14 @@
+name: npf-notebook
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - jupyterlab>=4.0
+  - pandas>=2.0
+  - numpy>=1.26
+  - matplotlib>=3.8
+  - seaborn>=0.13
+  - scikit-learn>=1.4    # re-fit GMM, silhouette scores
+  - plotly>=5.20         # interactive scatter plots
+  - ipywidgets>=8.0      # interactive widgets in JupyterLab
