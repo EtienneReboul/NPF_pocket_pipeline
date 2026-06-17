@@ -9,6 +9,7 @@ data/interpro/
 data/templates/
 data/boltz_inputs/
 results/
+results_03_06_2026/
 logs/
 
 # ── Snakemake internals ───────────────────────────────────────────────────────
