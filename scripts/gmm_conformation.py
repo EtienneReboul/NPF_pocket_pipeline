@@ -3,7 +3,11 @@
 scripts/gmm_conformation.py
 ============================
 Fits Gaussian Mixture Models (GMMs) to the distribution of MFS gate distances
-across all Boltz-2 predictions and compares model complexity using BIC.
+per NPF clade and compares model complexity using BIC.
+
+Clade is extracted from the protein name: NPFx.yy_<UniProtID> → NPFx.
+GMMs are fit independently per clade so that genetically related proteins
+(sharing similar structural tendencies) are modelled together.
 
 Feature space (2D):
   • ext_gate_A — minimum Cα tip distance at the extracellular gate
@@ -18,10 +22,12 @@ These two distances directly encode the alternating-access state:
 
 TM2/TM8 angle (Qureshi 2020) is retained as a diagnostic column.
 
-Models evaluated:
+Models evaluated per clade:
   • GMM sweep k=1–10: BIC curve to identify optimal number of components
   • GMM-3: one Gaussian per canonical MFS conformation
   • GMM-6: one per sub-state (apo/holo within each main conformation)
+
+A global GMM (all clades pooled) is also stored in the report for reference.
 
 Reference: Qureshi et al. (2020) Nature https://doi.org/10.1038/s41586-020-1963-z
 
@@ -34,6 +40,7 @@ Usage (called by Snakemake rule `gmm_analysis`):
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +51,15 @@ from matplotlib.patches import Ellipse
 import numpy as np
 import pandas as pd
 from sklearn.mixture import GaussianMixture
+
+
+MIN_SAMPLES_FOR_GMM = 12  # minimum per-clade samples to attempt GMM fitting
+
+
+def extract_clade(protein: str) -> str:
+    """NPF4.7_Q9FM20 → 'NPF4',  NPF1.2_P12345 → 'NPF1'."""
+    m = re.match(r'^(NPF\d+)', protein)
+    return m.group(1) if m else "unknown"
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -260,46 +276,18 @@ def main():
         + (f" ({n_no_gate} ok rows lack gate data — rerun compute_tm_angle)" if n_no_gate else "")
     )
 
-    if len(df_valid) < 12:
-        print(f"[gmm] ERROR: only {len(df_valid)} valid rows — need ≥12 for GMM fitting")
+    if len(df_valid) < MIN_SAMPLES_FOR_GMM:
+        print(f"[gmm] ERROR: only {len(df_valid)} valid rows — need ≥{MIN_SAMPLES_FOR_GMM} for GMM fitting")
         sys.exit(1)
 
-    X = df_valid[["ext_gate_A", "int_gate_A"]].values   # (n, 2)
+    # ── Assign clade from protein name ────────────────────────────────────────
+    df_valid["clade"] = df_valid["protein"].apply(extract_clade)
+    clades = sorted(df_valid["clade"].unique())
+    print(f"[gmm] {len(clades)} clades detected: {clades}")
 
-    # ── BIC sweep k=1–10 ─────────────────────────────────────────────────────
+    # ── Shared helpers ────────────────────────────────────────────────────────
     MAX_K = 10
-    print(f"[gmm] BIC sweep k=1..{MAX_K} on 2-D gate distances (n_init={args.n_init}) ...")
-    bic_by_k: dict[int, float] = {}
-    gmm_by_k: dict[int, GaussianMixture] = {}
-    for k in range(1, MAX_K + 1):
-        gmm_k = fit_gmm(X, n_components=k, n_init=args.n_init)
-        bic_by_k[k] = round(gmm_k.bic(X), 3)
-        gmm_by_k[k] = gmm_k
-        print(f"[gmm]   k={k:2d}  BIC = {bic_by_k[k]:.1f}")
-    best_k = min(bic_by_k, key=bic_by_k.__getitem__)
-    print(f"[gmm] Best k by BIC = {best_k}")
 
-    gmm3 = gmm_by_k[3]
-    gmm6 = gmm_by_k[6]
-    bic3 = bic_by_k[3]
-    bic6 = bic_by_k[6]
-    delta_bic = bic6 - bic3
-
-    if delta_bic < -10:
-        interpretation = (f"GMM-6 is strongly preferred (ΔBIC = {delta_bic:+.1f}): "
-                          "6 sub-states better explain the gate-distance distribution")
-    elif delta_bic < 0:
-        interpretation = (f"Weak evidence for GMM-6 (ΔBIC = {delta_bic:+.1f}): "
-                          "6 sub-states marginally better")
-    else:
-        interpretation = (f"GMM-3 is sufficient (ΔBIC = {delta_bic:+.1f}): "
-                          "additional sub-states not justified")
-
-    print(f"[gmm] BIC  GMM-3 = {bic3:.2f}")
-    print(f"[gmm] BIC  GMM-6 = {bic6:.2f}")
-    print(f"[gmm] {interpretation}")
-
-    # ── Build report ─────────────────────────────────────────────────────────
     def _sorted_components(gmm):
         idx = component_order(gmm)
         return {
@@ -309,66 +297,140 @@ def main():
             "converged":      bool(gmm.converged_),
         }
 
-    report = {
-        "n_valid_samples":       int(len(df_valid)),
-        "n_invalid_samples":     int(n_total - len(df_valid)),
-        "ext_gate_mean_A":       round(float(df_valid["ext_gate_A"].mean()), 2),
-        "ext_gate_std_A":        round(float(df_valid["ext_gate_A"].std()),  2),
-        "int_gate_mean_A":       round(float(df_valid["int_gate_A"].mean()), 2),
-        "int_gate_std_A":        round(float(df_valid["int_gate_A"].std()),  2),
-        "angle_mean_deg":        round(float(df_valid["angle_deg"].mean()),  2) if "angle_deg" in df_valid else None,
-        "bic_by_k":              bic_by_k,
-        "best_k_by_bic":         best_k,
-        "gmm3":                  {"bic": round(bic3, 3), **_sorted_components(gmm3)},
-        "gmm6":                  {"bic": round(bic6, 3), **_sorted_components(gmm6)},
-        "delta_bic_6_minus_3":   round(delta_bic, 3),
-        "preferred_model":       "GMM-6" if delta_bic < 0 else "GMM-3",
-        "interpretation":        interpretation,
-    }
-    (out_dir / "gmm_report.json").write_text(json.dumps(report, indent=2))
-    print(f"[gmm] Report: {out_dir / 'gmm_report.json'}")
-
-    # ── Per-sample assignments ────────────────────────────────────────────────
-    # Components are sorted: 0 = outward (high ext − int), last = inward
     def _rank_map(gmm):
         order = component_order(gmm)
         return {old: new for new, old in enumerate(order)}
 
-    df_valid["gmm3_component"]    = gmm3.predict(X)
-    df_valid["gmm6_component"]    = gmm6.predict(X)
-    df_valid["gmm_best_component"] = gmm_by_k[best_k].predict(X)
+    def _fit_and_assign(X_sub, df_sub, label, plot_dir):
+        """Fit BIC sweep + GMM-3/6, return (clade_report_dict, pred3, pred6, pred_best)."""
+        bic_by_k: dict[int, float] = {}
+        gmm_by_k: dict[int, GaussianMixture] = {}
+        for k in range(1, MAX_K + 1):
+            gmm_k = fit_gmm(X_sub, n_components=k, n_init=args.n_init)
+            bic_by_k[k] = round(gmm_k.bic(X_sub), 3)
+            gmm_by_k[k] = gmm_k
 
-    for col, gmm in [
-        ("gmm3_component",     gmm3),
-        ("gmm6_component",     gmm6),
-        ("gmm_best_component", gmm_by_k[best_k]),
-    ]:
-        rm = _rank_map(gmm)
-        df_valid[col] = df_valid[col].map(rm)
+        best_k   = min(bic_by_k, key=bic_by_k.__getitem__)
+        gmm3     = gmm_by_k[3]
+        gmm6     = gmm_by_k[6]
+        bic3     = bic_by_k[3]
+        bic6     = bic_by_k[6]
+        delta    = bic6 - bic3
+
+        if delta < -10:
+            interp = f"GMM-6 strongly preferred (ΔBIC={delta:+.1f})"
+        elif delta < 0:
+            interp = f"Weak evidence for GMM-6 (ΔBIC={delta:+.1f})"
+        else:
+            interp = f"GMM-3 sufficient (ΔBIC={delta:+.1f})"
+
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_bic_curve(bic_by_k, best_k, plot_dir / "bic_curve.png")
+        plot_gate_scatter(X_sub, gmm3, df_sub, f"{label} GMM-3",
+                          GMM3_LABELS, bic3, plot_dir / "gmm3.png")
+        plot_gate_scatter(X_sub, gmm6, df_sub, f"{label} GMM-6",
+                          GMM6_LABELS, bic6, plot_dir / "gmm6.png")
+        plot_gate_scatter(X_sub, gmm_by_k[best_k], df_sub,
+                          f"{label} GMM-{best_k} (BIC-optimal)",
+                          GMM3_LABELS if best_k == 3 else GMM6_LABELS,
+                          bic_by_k[best_k], plot_dir / "gmm_best.png")
+
+        clade_rep = {
+            "n_samples":          int(len(df_sub)),
+            "status":             "ok",
+            "best_k_by_bic":      best_k,
+            "bic_by_k":           bic_by_k,
+            "preferred_model":    "GMM-6" if delta < 0 else "GMM-3",
+            "delta_bic_6_minus_3": round(delta, 3),
+            "interpretation":     interp,
+            "gmm3":               {"bic": round(bic3, 3), **_sorted_components(gmm3)},
+            "gmm6":               {"bic": round(bic6, 3), **_sorted_components(gmm6)},
+        }
+
+        rm3    = _rank_map(gmm3)
+        rm6    = _rank_map(gmm6)
+        rm_best = _rank_map(gmm_by_k[best_k])
+        pred3  = [rm3[p]    for p in gmm3.predict(X_sub)]
+        pred6  = [rm6[p]    for p in gmm6.predict(X_sub)]
+        pred_b = [rm_best[p] for p in gmm_by_k[best_k].predict(X_sub)]
+
+        return clade_rep, pred3, pred6, pred_b
+
+    # ── Initialise assignment columns ─────────────────────────────────────────
+    df_valid["gmm3_component"]     = -1
+    df_valid["gmm6_component"]     = -1
+    df_valid["gmm_best_component"] = -1
+
+    # ── Global fit (reference / fallback for small clades) ────────────────────
+    X_all = df_valid[["ext_gate_A", "int_gate_A"]].values
+    print(f"[gmm] Fitting global GMM (n={len(df_valid)}) as reference/fallback ...")
+    global_rep, *_ = _fit_and_assign(X_all, df_valid, "global", out_dir / "global")
+    plot_angle_histogram(df_valid, out_dir / "angle_histogram.png")
+    plot_gate_by_conformation(df_valid, out_dir / "gate_by_conformation.png")
+    global_best_k = global_rep["best_k_by_bic"]
+
+    # ── Per-clade GMM fits ────────────────────────────────────────────────────
+    per_clade: dict = {}
+
+    for clade in clades:
+        mask     = df_valid["clade"] == clade
+        df_clade = df_valid[mask]
+        X_clade  = df_clade[["ext_gate_A", "int_gate_A"]].values
+        n        = len(df_clade)
+
+        if n < MIN_SAMPLES_FOR_GMM:
+            print(f"[gmm] {clade}: only {n} samples — too few, using global best_k={global_best_k} as fallback")
+            per_clade[clade] = {
+                "n_samples":     n,
+                "status":        "fallback_global",
+                "best_k_by_bic": global_best_k,
+            }
+            # Assign using the global GMM's rank-mapped predictions
+            X_global = df_valid[["ext_gate_A", "int_gate_A"]].values
+            # Rebuild global gmm3/gmm6 predictions for this subset
+            continue
+
+        print(f"[gmm] {clade}: {n} samples — fitting ...")
+        clade_rep, pred3, pred6, pred_b = _fit_and_assign(
+            X_clade, df_clade, clade, out_dir / clade
+        )
+        per_clade[clade] = clade_rep
+
+        df_valid.loc[mask, "gmm3_component"]     = pred3
+        df_valid.loc[mask, "gmm6_component"]     = pred6
+        df_valid.loc[mask, "gmm_best_component"] = pred_b
+
+        print(
+            f"[gmm] {clade}: best_k={clade_rep['best_k_by_bic']}, "
+            f"preferred={clade_rep['preferred_model']}, "
+            f"ΔBIC={clade_rep['delta_bic_6_minus_3']:+.1f}"
+        )
+
+    # ── Build and save report ─────────────────────────────────────────────────
+    report = {
+        "n_valid_samples":   int(len(df_valid)),
+        "n_invalid_samples": int(n_total - len(df_valid)),
+        "global":            global_rep,
+        "global_best_k":     global_best_k,
+        "per_clade":         per_clade,
+    }
+    (out_dir / "gmm_report.json").write_text(json.dumps(report, indent=2))
+    print(f"[gmm] Report: {out_dir / 'gmm_report.json'}")
 
     df_valid.to_csv(out_dir / "angles_with_assignments.csv", index=False)
 
-    # ── Plots ─────────────────────────────────────────────────────────────────
-    plot_bic_curve(bic_by_k, best_k, out_dir / "bic_curve.png")
-    plot_gate_scatter(X, gmm3, df_valid,
-                      "GMM-3  (outward / occluded / inward)",
-                      GMM3_LABELS, bic3, out_dir / "gmm3.png")
-    plot_gate_scatter(X, gmm6, df_valid,
-                      "GMM-6  (6 sub-states)",
-                      GMM6_LABELS, bic6, out_dir / "gmm6.png")
-    plot_gate_scatter(X, gmm_by_k[best_k], df_valid,
-                      f"GMM-{best_k}  (BIC-optimal)",
-                      GMM3_LABELS if best_k == 3 else GMM6_LABELS, bic_by_k[best_k],
-                      out_dir / "gmm_best.png")
-    plot_angle_histogram(df_valid, out_dir / "angle_histogram.png")
-    plot_gate_by_conformation(df_valid, out_dir / "gate_by_conformation.png")
+    # ── Summary ───────────────────────────────────────────────────────────────
+    n_clades_ok  = sum(1 for v in per_clade.values() if v["status"] == "ok")
+    n_clades_fb  = len(per_clade) - n_clades_ok
+    sentinel_msg = (
+        f"GMM done. {n_clades_ok} clades fitted, {n_clades_fb} used global fallback. "
+        f"Global best_k={global_best_k} "
+        f"(BIC(3)={global_rep['gmm3']['bic']:.1f}, "
+        f"BIC(6)={global_rep['gmm6']['bic']:.1f}).\n"
+    )
 
     # ── Sentinel ──────────────────────────────────────────────────────────────
-    Path(args.sentinel).write_text(
-        f"GMM done. Best k={best_k} (BIC sweep on 2-D gate distances). "
-        f"BIC(3)={bic3:.1f}, BIC(6)={bic6:.1f}, ΔBIC={delta_bic:+.1f}. "
-        f"Preferred biological model: {report['preferred_model']}.\n"
-    )
+    Path(args.sentinel).write_text(sentinel_msg)
     print(f"[gmm] Done. Sentinel: {args.sentinel}")
 
 

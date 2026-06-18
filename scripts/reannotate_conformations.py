@@ -45,10 +45,17 @@ Usage (called by Snakemake rule reannotate_conformations):
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 import pandas as pd
+
+
+def extract_clade(protein: str) -> str:
+    """NPF4.7_Q9FM20 → 'NPF4'."""
+    m = re.match(r'^(NPF\d+)', protein)
+    return m.group(1) if m else "unknown"
 
 
 # ── Canonical conformation mapping ────────────────────────────────────────────
@@ -122,15 +129,15 @@ def assign_folder(row: pd.Series, best_k: int) -> str:
         folder = GMM6_TO_FOLDER.get(comp_best)
         if folder is not None:
             return folder
-        # GMM-6 component out of range (shouldn't happen) → fall back
+        # GMM-6 component out of range → fall back to GMM-3
         print(f"[reannotate] WARNING: gmm6 component {comp_best} out of range, "
               f"falling back to gmm3 for {row['protein']}/{row['sample_id']}")
 
-    # GMM-3 (or fallback)
+    # GMM-3 (or fallback from GMM-6 out-of-range)
     key    = (comp3, lig)
     folder = GMM3_TO_FOLDER.get(key)
     if folder is None:
-        return f"component_{comp3}_{lig}"   # shouldn't happen
+        return f"component_{comp3}_{lig}"
     return folder
 
 
@@ -143,10 +150,11 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Load GMM report ───────────────────────────────────────────────────────
-    report  = json.loads(Path(args.report).read_text())
-    best_k  = report["best_k_by_bic"]
-    print(f"[reannotate] best_k = {best_k}  →  "
-          f"{'GMM-6 direct mapping' if best_k == 6 else 'GMM-3 + apo/holo split'}")
+    report      = json.loads(Path(args.report).read_text())
+    per_clade   = report.get("per_clade", {})
+    global_best_k = report.get("global_best_k", 3)
+    print(f"[reannotate] Per-clade GMM report loaded. "
+          f"{len(per_clade)} clades, global fallback best_k={global_best_k}")
 
     # ── Canonical folders are created per-protein below ──────────────────────
 
@@ -177,7 +185,9 @@ def main():
             n_missing += 1
             continue
 
-        folder    = assign_folder(row, best_k)
+        clade   = extract_clade(protein)
+        best_k  = per_clade.get(clade, {}).get("best_k_by_bic", global_best_k)
+        folder  = assign_folder(row, best_k)
         dest_dir  = out_dir / protein / folder
         dest_dir.mkdir(parents=True, exist_ok=True)
         link_name = f"{conformation}__{sample_id}.cif"
@@ -209,15 +219,26 @@ def main():
     for folder in CANONICAL_FOLDERS:
         print(f"  {folder:30s}  {counts.get(folder, 0):4d} structures")
 
+    if per_clade:
+        print("[reannotate] Per-clade best_k:")
+        for clade_name in sorted(per_clade):
+            ck = per_clade[clade_name].get("best_k_by_bic", global_best_k)
+            st = per_clade[clade_name].get("status", "?")
+            print(f"  {clade_name:12s}  best_k={ck}  ({st})")
+
     if n_missing > 0 and n_ok == 0:
         print("[reannotate] ERROR: no CIFs found — check --boltz-out path")
         sys.exit(1)
 
     # ── Sentinel ──────────────────────────────────────────────────────────────
+    clade_summary = ", ".join(
+        f"{c}:k={v.get('best_k_by_bic', global_best_k)}"
+        for c, v in sorted(per_clade.items())
+    )
     Path(args.sentinel).write_text(
-        f"Reannotation done. best_k={best_k}. "
-        f"{'GMM-6 direct' if best_k == 6 else 'GMM-3 + apo/holo'}. "
-        f"{n_ok} symlinks, {n_missing} missing.\n"
+        f"Reannotation done (per-clade GMM). "
+        f"{n_ok} symlinks, {n_missing} missing. "
+        f"Clades: {clade_summary}\n"
     )
     print(f"[reannotate] Done. Sentinel: {args.sentinel}")
 
