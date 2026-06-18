@@ -53,30 +53,32 @@ import re
 from pathlib import Path
 from collections import defaultdict
 
+
 configfile: "config.yaml"
 
+
 # ── Directory shortcuts ────────────────────────────────────────────────────────
-DIRS         = config["dirs"]
-FASTA_DIR    = Path(DIRS["fasta"])
-MSA_DIR      = Path(DIRS["msa"])
+DIRS = config["dirs"]
+FASTA_DIR = Path(DIRS["fasta"])
+MSA_DIR = Path(DIRS["msa"])
 INTERPRO_DIR = Path(DIRS["interpro"])
-TMPL_DIR     = Path(DIRS["templates"])
+TMPL_DIR = Path(DIRS["templates"])
 BOLTZ_IN_DIR = Path(DIRS["boltz_in"])
-BOLTZ_OUT    = Path(DIRS["boltz_out"])
-MIN_DIR      = Path(DIRS["minimized"])
-PLIP_DIR     = Path(DIRS["plip"])
-DSSP_DIR     = Path(DIRS["dssp"])
-TM_ANG_DIR   = Path(DIRS["tm_angles"])
-GMM_DIR      = Path(DIRS["gmm"])
-LOG_DIR      = Path(DIRS["logs"])
+BOLTZ_OUT = Path(DIRS["boltz_out"])
+MIN_DIR = Path(DIRS["minimized"])
+PLIP_DIR = Path(DIRS["plip"])
+DSSP_DIR = Path(DIRS["dssp"])
+TM_ANG_DIR = Path(DIRS["tm_angles"])
+GMM_DIR = Path(DIRS["gmm"])
+LOG_DIR = Path(DIRS["logs"])
 
 # ── Config shortcuts ───────────────────────────────────────────────────────────
-BOLTZ_CFG    = config["boltz"]
-PLIP_CFG     = config["plip"]
-VIZ_CFG      = config["visualization"]
-TM_ANN_CFG   = config["tm_annotation"]
-TM_ANG_CFG   = config["tm_angle"]
-GMM_CFG      = config["gmm"]
+BOLTZ_CFG = config["boltz"]
+PLIP_CFG = config["plip"]
+VIZ_CFG = config["visualization"]
+TM_ANN_CFG = config["tm_annotation"]
+TM_ANG_CFG = config["tm_angle"]
+GMM_CFG = config["gmm"]
 CHIMERAX_BIN = config["chimerax_bin"]
 CONFORMATIONS = list(config["templates"]["conformations"].keys())
 
@@ -85,10 +87,11 @@ CONFORMATIONS = list(config["templates"]["conformations"].keys())
 # The sentinel lists one protein base-name per line.
 # We use a checkpoint so Snakemake re-evaluates the DAG after MSA finishes.
 
-MSA_SENTINEL   = MSA_DIR / "msa.done"
-IPRO_SENTINEL  = INTERPRO_DIR / "interproscan.done"
+MSA_SENTINEL = MSA_DIR / "msa.done"
+IPRO_SENTINEL = INTERPRO_DIR / "interproscan.done"
 TM_ANN_SENTINEL = INTERPRO_DIR / "tm_annotation.done"
-TMPL_SENTINEL  = TMPL_DIR / "templates.done"
+TMPL_SENTINEL = TMPL_DIR / "templates.done"
+
 
 def read_proteins(sentinel_path):
     """Read protein names from the MSA sentinel file."""
@@ -103,8 +106,11 @@ def read_proteins(sentinel_path):
 #   {out_dir}/predictions/{stem}/model_0.cif, model_1.cif, ...
 # We discover them in the aggregate rule via glob.
 
+
 def boltz_output_cifs(protein, conformation):
-    pattern = BOLTZ_OUT / protein / conformation / "boltz_out" / "predictions" / "*" / "*.cif"
+    pattern = (
+        BOLTZ_OUT / protein / conformation / "boltz_out" / "predictions" / "*" / "*.cif"
+    )
     return sorted(Path(".").glob(str(pattern)))
 
 
@@ -116,72 +122,74 @@ def boltz_done_file(protein, conformation):
 # STAGE CHECKPOINTS & RULE ALL
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 checkpoint msa_checkpoint:
     """
-    Checkpoint: runs Stage 1 (MSA). After completion, Snakemake re-evaluates
-    the DAG using the discovered protein list.
-    """
+Checkpoint: runs Stage 1 (MSA). After completion, Snakemake re-evaluates
+the DAG using the discovered protein list.
+"""
     output:
-        sentinel = str(MSA_SENTINEL),
-    params:
-        fasta_dir    = str(FASTA_DIR),
-        a3m_dir      = str(MSA_DIR / "a3m"),
-        pdb_dir      = str(MSA_DIR / "pdb"),
-        sh_dir       = str(MSA_DIR / "sh"),
-        query        = config["uniprot"]["query"],
-        size         = config["uniprot"]["size"],
-        delay        = config["colabfold"]["delay"],
-        retries      = config["colabfold"]["max_retries"],
-        poll_int     = config["colabfold"]["poll_interval"],
-        poll_timeout = config["colabfold"]["poll_timeout"],
+        sentinel=str(MSA_SENTINEL),
     log:
         str(LOG_DIR / "msa.log"),
+    params:
+        fasta_dir=str(FASTA_DIR),
+        a3m_dir=str(MSA_DIR / "a3m"),
+        pdb_dir=str(MSA_DIR / "pdb"),
+        sh_dir=str(MSA_DIR / "sh"),
+        query=config["uniprot"]["query"],
+        size=config["uniprot"]["size"],
+        delay=config["colabfold"]["delay"],
+        retries=config["colabfold"]["max_retries"],
+        poll_int=config["colabfold"]["poll_interval"],
+        poll_timeout=config["colabfold"]["poll_timeout"],
     shell:
         """
         python scripts/run_msa.py \\
-            --fasta-dir     {params.fasta_dir} \\
-            --a3m-dir       {params.a3m_dir} \\
-            --pdb-dir       {params.pdb_dir} \\
-            --sh-dir        {params.sh_dir} \\
-            --sentinel      {output.sentinel} \\
-            --query         '{params.query}' \\
-            --size          {params.size} \\
-            --delay         {params.delay} \\
-            --retries       {params.retries} \\
-            --poll-interval {params.poll_int} \\
-            --poll-timeout  {params.poll_timeout} \\
-        > {log} 2>&1
+        --fasta-dir {params.fasta_dir} \\
+        --a3m-dir {params.a3m_dir} \\
+        --pdb-dir {params.pdb_dir} \\
+        --sh-dir {params.sh_dir} \\
+        --sentinel {output.sentinel} \\
+        --query '{params.query}' \\
+        --size {params.size} \\
+        --delay {params.delay} \\
+        --retries {params.retries} \\
+        --poll-interval {params.poll_int} \\
+        --poll-timeout {params.poll_timeout} \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 2: InterProScan ─────────────────────────────────────────────────────
 
+
 rule run_interproscan:
     input:
-        fasta    = str(FASTA_DIR / "npf_arabidopsis.fasta"),
-        msa_done = str(MSA_SENTINEL),   # ensures FASTA is ready
+        fasta=str(FASTA_DIR / "npf_arabidopsis.fasta"),
+        msa_done=str(MSA_SENTINEL),  # ensures FASTA is ready
     output:
-        sentinel = str(IPRO_SENTINEL),
-        summary  = str(INTERPRO_DIR / "cdd_summary.json"),
-    params:
-        out_dir      = str(INTERPRO_DIR),
-        email        = config["interproscan"]["email"],
-        accessions   = " ".join(config["interproscan"]["cdd_accessions"]),
-        poll_int     = config["interproscan"]["poll_interval"],
-        poll_timeout = config["interproscan"]["poll_timeout"],
+        sentinel=str(IPRO_SENTINEL),
+        summary=str(INTERPRO_DIR / "cdd_summary.json"),
     log:
         str(LOG_DIR / "interproscan.log"),
+    params:
+        out_dir=str(INTERPRO_DIR),
+        email=config["interproscan"]["email"],
+        accessions=" ".join(config["interproscan"]["cdd_accessions"]),
+        poll_int=config["interproscan"]["poll_interval"],
+        poll_timeout=config["interproscan"]["poll_timeout"],
     shell:
         """
         python scripts/run_interproscan.py \\
-            --fasta         {input.fasta} \\
-            --out-dir       {params.out_dir} \\
-            --email         {params.email} \\
-            --accessions    {params.accessions} \\
-            --sentinel      {output.sentinel} \\
-            --poll-interval {params.poll_int} \\
-            --poll-timeout  {params.poll_timeout} \\
-        > {log} 2>&1
+        --fasta {input.fasta} \\
+        --out-dir {params.out_dir} \\
+        --email {params.email} \\
+        --accessions {params.accessions} \\
+        --sentinel {output.sentinel} \\
+        --poll-interval {params.poll_int} \\
+        --poll-timeout {params.poll_timeout} \\
+        >{log} 2>&1
         """
 
 
@@ -189,122 +197,126 @@ rule run_interproscan:
 # Runs independently of CDD interproscan — results cached as {name}_tm.json.
 # Outputs tm_topology_summary.json used by compute_tm_angle (Stage 11).
 
+
 rule run_tm_annotation:
     input:
-        fasta    = str(FASTA_DIR / "npf_arabidopsis.fasta"),
-        msa_done = str(MSA_SENTINEL),
+        fasta=str(FASTA_DIR / "npf_arabidopsis.fasta"),
+        msa_done=str(MSA_SENTINEL),
     output:
-        sentinel = str(TM_ANN_SENTINEL),
-        topology = str(INTERPRO_DIR / "tm_topology_summary.json"),
-    params:
-        out_dir      = str(INTERPRO_DIR),
-        email        = TM_ANN_CFG["email"],
-        poll_int     = TM_ANN_CFG["poll_interval"],
-        poll_timeout = TM_ANN_CFG["poll_timeout"],
+        sentinel=str(TM_ANN_SENTINEL),
+        topology=str(INTERPRO_DIR / "tm_topology_summary.json"),
     log:
         str(LOG_DIR / "tm_annotation.log"),
+    params:
+        out_dir=str(INTERPRO_DIR),
+        email=TM_ANN_CFG["email"],
+        poll_int=TM_ANN_CFG["poll_interval"],
+        poll_timeout=TM_ANN_CFG["poll_timeout"],
     shell:
         """
         python scripts/run_tm_annotation.py \\
-            --fasta         {input.fasta} \\
-            --out-dir       {params.out_dir} \\
-            --email         {params.email} \\
-            --sentinel      {output.sentinel} \\
-            --poll-interval {params.poll_int} \\
-            --poll-timeout  {params.poll_timeout} \\
-        > {log} 2>&1
+        --fasta {input.fasta} \\
+        --out-dir {params.out_dir} \\
+        --email {params.email} \\
+        --sentinel {output.sentinel} \\
+        --poll-interval {params.poll_int} \\
+        --poll-timeout {params.poll_timeout} \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 3: Template download ────────────────────────────────────────────────
 
+
 rule download_templates:
     output:
-        sentinel = str(TMPL_SENTINEL),
-    params:
-        templates_root = str(TMPL_DIR),
+        sentinel=str(TMPL_SENTINEL),
     log:
         str(LOG_DIR / "download_templates.log"),
+    params:
+        templates_root=str(TMPL_DIR),
     shell:
         """
         python scripts/download_templates.py \\
-            --config         config.yaml \\
-            --templates-root {params.templates_root} \\
-            --sentinel       {output.sentinel} \\
-        > {log} 2>&1
+        --config config.yaml \\
+        --templates-root {params.templates_root} \\
+        --sentinel {output.sentinel} \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 4: Prepare Boltz-2 input YAML ──────────────────────────────────────
 
+
 rule prepare_boltz_input:
     input:
-        fasta       = str(FASTA_DIR / "{protein}.fasta"),
-        a3m         = str(MSA_DIR / "a3m" / "{protein}.a3m"),
-        cdd_summary = str(INTERPRO_DIR / "cdd_summary.json"),   # declared output of run_interproscan
-        tmpl_done   = str(TMPL_SENTINEL),
+        fasta=str(FASTA_DIR / "{protein}.fasta"),
+        a3m=str(MSA_DIR / "a3m" / "{protein}.a3m"),
+        cdd_summary=str(INTERPRO_DIR / "cdd_summary.json"),  # declared output of run_interproscan
+        tmpl_done=str(TMPL_SENTINEL),
     output:
-        yaml = str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
-    params:
-        templates_dir       = str(TMPL_DIR / "{conformation}"),
-        ligand_smiles       = BOLTZ_CFG["ligand_smiles"],
-        ligand_entity_id    = BOLTZ_CFG["ligand_entity_id"],
-        protein_entity_id   = BOLTZ_CFG["protein_entity_id"],
-        pocket_max_distance = BOLTZ_CFG["pocket_max_distance"],
-        pocket_force        = str(BOLTZ_CFG["pocket_force"]).lower(),
+        yaml=str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
     log:
         str(LOG_DIR / "boltz_input" / "{protein}" / "{conformation}.log"),
+    params:
+        templates_dir=str(TMPL_DIR / "{conformation}"),
+        ligand_smiles=BOLTZ_CFG["ligand_smiles"],
+        ligand_entity_id=BOLTZ_CFG["ligand_entity_id"],
+        protein_entity_id=BOLTZ_CFG["protein_entity_id"],
+        pocket_max_distance=BOLTZ_CFG["pocket_max_distance"],
+        pocket_force=str(BOLTZ_CFG["pocket_force"]).lower(),
     shell:
         """
         python scripts/make_boltz_input.py \\
-            --fasta               {input.fasta} \\
-            --a3m                 {input.a3m} \\
-            --cdd-summary         {input.cdd_summary} \\
-            --protein-name        {wildcards.protein} \\
-            --templates-dir       {params.templates_dir} \\
-            --conformation        {wildcards.conformation} \\
-            --output              {output.yaml} \\
-            --ligand-smiles       '{params.ligand_smiles}' \\
-            --ligand-entity-id    {params.ligand_entity_id} \\
-            --protein-entity-id   {params.protein_entity_id} \\
-            --pocket-max-distance {params.pocket_max_distance} \\
-            --pocket-force        {params.pocket_force} \\
-        > {log} 2>&1
+        --fasta {input.fasta} \\
+        --a3m {input.a3m} \\
+        --cdd-summary {input.cdd_summary} \\
+        --protein-name {wildcards.protein} \\
+        --templates-dir {params.templates_dir} \\
+        --conformation {wildcards.conformation} \\
+        --output {output.yaml} \\
+        --ligand-smiles '{params.ligand_smiles}' \\
+        --ligand-entity-id {params.ligand_entity_id} \\
+        --protein-entity-id {params.protein_entity_id} \\
+        --pocket-max-distance {params.pocket_max_distance} \\
+        --pocket-force {params.pocket_force} \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 5: Run Boltz-2 ─────────────────────────────────────────────────────
 
+
 rule run_boltz2:
     input:
-        yaml = str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
+        yaml=str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
     output:
-        done = str(BOLTZ_OUT / "{protein}" / "{conformation}" / "prediction.done"),
-    params:
-        out_dir          = str(BOLTZ_OUT / "{protein}" / "{conformation}" / "boltz_out"),
-        recycling_steps  = BOLTZ_CFG["recycling_steps"],
-        diffusion_samples = BOLTZ_CFG["diffusion_samples"],
-        output_format    = BOLTZ_CFG["output_format"],
-        accelerator      = BOLTZ_CFG["accelerator"],
-        no_kernels_flag  = "--no_kernels" if BOLTZ_CFG["no_kernels"] else "",
-        extra_flags      = BOLTZ_CFG.get("extra_flags", ""),
+        done=str(BOLTZ_OUT / "{protein}" / "{conformation}" / "prediction.done"),
     log:
         str(LOG_DIR / "boltz_run" / "{protein}" / "{conformation}.log"),
     conda:
         "envs/boltz2.yaml"
+    params:
+        out_dir=str(BOLTZ_OUT / "{protein}" / "{conformation}" / "boltz_out"),
+        recycling_steps=BOLTZ_CFG["recycling_steps"],
+        diffusion_samples=BOLTZ_CFG["diffusion_samples"],
+        output_format=BOLTZ_CFG["output_format"],
+        accelerator=BOLTZ_CFG["accelerator"],
+        no_kernels_flag="--no_kernels" if BOLTZ_CFG["no_kernels"] else "",
+        extra_flags=BOLTZ_CFG.get("extra_flags", ""),
     shell:
         """
         boltz predict \\
-            {input.yaml} \\
-            --out_dir          {params.out_dir} \\
-            --recycling_steps  {params.recycling_steps} \\
-            --diffusion_samples {params.diffusion_samples} \\
-            --output_format    {params.output_format} \\
-            --accelerator      {params.accelerator} \\
-            {params.no_kernels_flag} \\
-            {params.extra_flags} \\
-        > {log} 2>&1
-        echo "$(date): prediction finished" > {output.done}
+        {input.yaml} \\
+        --out_dir {params.out_dir} \\
+        --recycling_steps {params.recycling_steps} \\
+        --diffusion_samples {params.diffusion_samples} \\
+        --output_format {params.output_format} \\
+        --accelerator {params.accelerator} \\
+        {params.no_kernels_flag} \\
+        {params.extra_flags} \\
+        >{log} 2>&1
+        echo "$(date): prediction finished" >{output.done}
         """
 
 
@@ -331,11 +343,12 @@ rule run_boltz2:
 #
 # {sample_id} = CIF stem, e.g. "model_0", "model_1", ...
 
+
 checkpoint discover_boltz_outputs:
     input:
-        done = str(BOLTZ_OUT / "{protein}" / "{conformation}" / "prediction.done"),
+        done=str(BOLTZ_OUT / "{protein}" / "{conformation}" / "prediction.done"),
     output:
-        manifest = str(BOLTZ_OUT / "{protein}" / "{conformation}" / "cif_manifest.json"),
+        manifest=str(BOLTZ_OUT / "{protein}" / "{conformation}" / "cif_manifest.json"),
     run:
         pred_root = (
             Path(BOLTZ_OUT)
@@ -389,148 +402,213 @@ def _cif_for_sample(wildcards):
 
 # ── Stage 6b: ChimeraX minimization ──────────────────────────────────────────
 
+
 rule minimize_cif:
     input:
-        cif = _cif_for_sample,
+        cif=_cif_for_sample,
     output:
-        pdb = str(MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"),
-    params:
-        chimerax = CHIMERAX_BIN,
+        pdb=str(
+            MIN_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized.pdb"
+        ),
     log:
         str(LOG_DIR / "minimize" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    params:
+        chimerax=CHIMERAX_BIN,
     shell:
         """
         mkdir -p $(dirname {output.pdb})
         {params.chimerax} --nogui \\
-            --script "scripts/minimize_cif.py {input.cif} {output.pdb}" \\
-        > {log} 2>&1
+        --script "scripts/minimize_cif.py {input.cif} {output.pdb}" \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 7: PLIP via Docker ──────────────────────────────────────────────────
 
+
 rule run_plip:
     input:
-        pdb = str(MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"),
+        pdb=str(
+            MIN_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized.pdb"
+        ),
     output:
-        report = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "model_minimized_report.txt"
-        ),
-    params:
-        image         = PLIP_CFG["image"],
-        docker_memory = PLIP_CFG["docker_memory"],
-        platform_flag = (
-            f"--platform {PLIP_CFG['docker_platform']}"
-            if PLIP_CFG.get("docker_platform") else ""
-        ),
-        chains_flag   = (
-            f'--chains "[[\\"{PLIP_CFG["receptor_chain"]}\\","'
-            f'\\"{PLIP_CFG["ligand_chain"]}\\""]]"'
-        ),
-        report_dir    = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
+        report=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
             / "model_minimized_report"
+            / "model_minimized_report.txt"
         ),
     log:
         str(LOG_DIR / "plip" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+    params:
+        image=PLIP_CFG["image"],
+        docker_memory=PLIP_CFG["docker_memory"],
+        platform_flag=(
+            f"--platform {PLIP_CFG['docker_platform']}"
+            if PLIP_CFG.get("docker_platform")
+            else ""
+        ),
+        chains_flag=(
+            f'--chains "[[\\"{PLIP_CFG["receptor_chain"]}\\","'
+            f'\\"{PLIP_CFG["ligand_chain"]}\\""]]"'
+        ),
+        report_dir=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+        ),
     shell:
         """
         mkdir -p {params.report_dir}
         docker run --rm \\
-            --memory={params.docker_memory} \\
-            {params.platform_flag} \\
-            -v $(pwd):/work -w /work \\
-            {params.image} \\
-            -f {input.pdb} \\
-            -t \\
-            {params.chains_flag} \\
-            -o {params.report_dir} \\
-        > {log} 2>&1
+        --memory={params.docker_memory} \\
+        {params.platform_flag} \\
+        -v $(pwd):/work -w /work \\
+        {params.image} \\
+        -f {input.pdb} \\
+        -t \\
+        {params.chains_flag} \\
+        -o {params.report_dir} \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 8: pliparser — PLIP report → CSV + CXC ─────────────────────────────
 
+
 rule plip_to_csv:
     input:
-        report = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "model_minimized_report.txt"
+        report=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+            / "model_minimized_report.txt"
         ),
     output:
-        summary = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "csv" / "summary.csv"
-        ),
-    params:
-        out_dir = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "csv"
+        summary=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+            / "csv"
+            / "summary.csv"
         ),
     log:
-        str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_csv.log"),
+        str(
+            LOG_DIR
+            / "pliparser"
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}_csv.log"
+        ),
     conda:
         "envs/pliparser.yaml"
+    params:
+        out_dir=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+            / "csv"
+        ),
     shell:
         """
         mkdir -p {params.out_dir}
         pliparser plip2csv \\
-            --input  {input.report} \\
-            --output {params.out_dir}/ \\
-        > {log} 2>&1
+        --input {input.report} \\
+        --output {params.out_dir}/ \\
+        >{log} 2>&1
         """
 
 
 rule csv_to_cxc:
     input:
-        csv_dir = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "csv"
+        csv_dir=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+            / "csv"
         ),
-        pdb = str(
-            MIN_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "model_minimized.pdb"
+        pdb=str(
+            MIN_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized.pdb"
         ),
     output:
-        cxc    = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "interaction.cxc"
+        cxc=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+            / "interaction.cxc"
         ),
-        config_json = str(
-            PLIP_DIR / "{protein}" / "{conformation}" / "{sample_id}"
-            / "model_minimized_report" / "cxc-config.json"
+        config_json=str(
+            PLIP_DIR
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}"
+            / "model_minimized_report"
+            / "cxc-config.json"
         ),
-    params:
-        receptor_chain = PLIP_CFG["receptor_chain"],
-        ligand_chain   = PLIP_CFG["ligand_chain"],
-        transparency   = VIZ_CFG["transparency"],
-        receptor_color = VIZ_CFG["receptor_color"],
-        ligand_color   = VIZ_CFG["ligand_color"],
     log:
-        str(LOG_DIR / "pliparser" / "{protein}" / "{conformation}" / "{sample_id}_cxc.log"),
+        str(
+            LOG_DIR
+            / "pliparser"
+            / "{protein}"
+            / "{conformation}"
+            / "{sample_id}_cxc.log"
+        ),
     conda:
         "envs/pliparser.yaml"
+    params:
+        receptor_chain=PLIP_CFG["receptor_chain"],
+        ligand_chain=PLIP_CFG["ligand_chain"],
+        transparency=VIZ_CFG["transparency"],
+        receptor_color=VIZ_CFG["receptor_color"],
+        ligand_color=VIZ_CFG["ligand_color"],
     shell:
         """
         python scripts/make_cxc_config.py \\
-            --pdb             {input.pdb} \\
-            --output          {output.config_json} \\
-            --receptor-chain  {params.receptor_chain} \\
-            --ligand-chain    {params.ligand_chain} \\
-            --transparency    {params.transparency} \\
-            --receptor-color  {params.receptor_color} \\
-            --ligand-color    {params.ligand_color} \\
-        > {log} 2>&1
+        --pdb {input.pdb} \\
+        --output {output.config_json} \\
+        --receptor-chain {params.receptor_chain} \\
+        --ligand-chain {params.ligand_chain} \\
+        --transparency {params.transparency} \\
+        --receptor-color {params.receptor_color} \\
+        --ligand-color {params.ligand_color} \\
+        >{log} 2>&1
 
         pliparser csv2cxc \\
-            --input  {input.csv_dir} \\
-            --output {output.cxc} \\
-            --config {output.config_json} \\
-        >> {log} 2>&1
+        --input {input.csv_dir} \\
+        --output {output.cxc} \\
+        --config {output.config_json} \\
+        >>{log} 2>&1
         """
 
 
 # ── Stage 9: Aggregate per protein × conformation ────────────────────────────
+
 
 def summaries_for_protein_conformation(wildcards):
     """
@@ -541,8 +619,13 @@ def summaries_for_protein_conformation(wildcards):
     sample_ids = _sample_ids(wildcards.protein, wildcards.conformation)
     return [
         str(
-            PLIP_DIR / wildcards.protein / wildcards.conformation
-            / sid / "model_minimized_report" / "csv" / "summary.csv"
+            PLIP_DIR
+            / wildcards.protein
+            / wildcards.conformation
+            / sid
+            / "model_minimized_report"
+            / "csv"
+            / "summary.csv"
         )
         for sid in sample_ids
     ]
@@ -550,7 +633,7 @@ def summaries_for_protein_conformation(wildcards):
 
 rule aggregate_plip:
     input:
-        csvs = summaries_for_protein_conformation,
+        csvs=summaries_for_protein_conformation,
     output:
         str(PLIP_DIR / "{protein}" / "{conformation}" / "summary.csv"),
     log:
@@ -560,108 +643,93 @@ rule aggregate_plip:
     shell:
         """
         python scripts/aggregate_plip_summary.py \\
-            --output {output} \\
-            {input.csvs} \\
-        > {log} 2>&1
+        --output {output} \\
+        {input.csvs} \\
+        >{log} 2>&1
         """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGES 10–13 — Conformational angle classification via GMM
 # ─────────────────────────────────────────────────────────────────────────────
-# Dependency graph (per protein × conformation × sample_id):
+# Dependency graph (per protein × conformation, batched across all sample_ids):
 #
 #   discover_boltz_outputs ─┬─► minimize_cif ─► run_plip ─► ... (existing chain)
 #                           │
-#                           └─► run_dssp ─────────────────┐
-#                                                          ▼
-#                           run_tm_annotation ──► compute_tm_angle
-#                                                          │
-#                                                          ▼
-#                                               collect_tm_angles (per protein×conf)
+#                           └─► run_dssp_batch ────────────────────────────────┐
+#                                (one ChimeraX session, all samples)           ▼
+#                           run_tm_annotation ──► compute_tm_angles_batch ─► angles.csv
+#                                (one Python call, all samples)
 #                                                          │
 #                                                          ▼
 #                                                    gmm_analysis (global)
+#
+# Packaging per protein × conformation reduces ChimeraX launch overhead from
+# N_samples jobs to 1 job per protein × conformation.
 
 
-# ── Stage 10: ChimeraX DSSP on raw Boltz-2 CIF ────────────────────────────────
-# Sanity check: verify that Phobius/TMHMM-predicted TM2 and TM8 are helical
-# in the actual predicted structure before computing the angle.
+# ── Stage 10: ChimeraX DSSP on raw Boltz-2 CIFs (batched per protein×conf) ───
+# One ChimeraX session opens all samples for a protein × conformation in sequence,
+# writes results/dssp/{protein}/{conformation}/{sample_id}/dssp.json for each,
+# and touches a sentinel when done.
 
-rule run_dssp:
+
+rule run_dssp_batch:
     input:
-        cif = _cif_for_sample,
+        manifest=str(BOLTZ_OUT / "{protein}" / "{conformation}" / "cif_manifest.json"),
     output:
-        dssp = str(DSSP_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "dssp.json"),
-    params:
-        chimerax = CHIMERAX_BIN,
+        sentinel=str(DSSP_DIR / "{protein}" / "{conformation}" / "dssp.done"),
     log:
-        str(LOG_DIR / "dssp" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+        str(LOG_DIR / "dssp" / "{protein}" / "{conformation}.log"),
+    params:
+        chimerax=CHIMERAX_BIN,
+        dssp_dir=str(DSSP_DIR / "{protein}" / "{conformation}"),
     shell:
         """
-        mkdir -p $(dirname {output.dssp})
+        mkdir -p {params.dssp_dir}
         {params.chimerax} --nogui \\
-            --script "scripts/chimerax_dssp.py {input.cif} {output.dssp}" \\
-        > {log} 2>&1
+        --script "scripts/chimerax_dssp.py {input.manifest} {params.dssp_dir}" \\
+        >{log} 2>&1
+        touch {output.sentinel}
         """
 
 
-# ── Stage 11: TM2/TM8 angle per sample ────────────────────────────────────────
+# ── Stages 11+12: TM2/TM8 angle for all samples → angles.csv (batched) ───────
+# One Python call per protein × conformation processes all samples and writes
+# angles.csv directly, replacing both the per-sample compute_tm_angle rule and
+# the separate collect_tm_angles aggregation step.
 
-rule compute_tm_angle:
+
+rule compute_tm_angles_batch:
     input:
-        cif      = _cif_for_sample,
-        dssp     = str(DSSP_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "dssp.json"),
-        topology = str(INTERPRO_DIR / "tm_topology_summary.json"),
+        manifest=str(BOLTZ_OUT / "{protein}" / "{conformation}" / "cif_manifest.json"),
+        dssp_done=str(DSSP_DIR / "{protein}" / "{conformation}" / "dssp.done"),
+        topology=str(INTERPRO_DIR / "tm_topology_summary.json"),
     output:
-        angle_csv = str(TM_ANG_DIR / "{protein}" / "{conformation}" / "{sample_id}" / "angle.csv"),
-    params:
-        min_helix_frac = TM_ANG_CFG["min_helix_frac"],
+        angles_csv=str(TM_ANG_DIR / "{protein}" / "{conformation}" / "angles.csv"),
     log:
-        str(LOG_DIR / "tm_angle" / "{protein}" / "{conformation}" / "{sample_id}.log"),
+        str(LOG_DIR / "tm_angle" / "{protein}" / "{conformation}.log"),
     conda:
         "envs/tm_analysis.yaml"
+    params:
+        dssp_dir=str(DSSP_DIR / "{protein}" / "{conformation}"),
+        min_helix_frac=TM_ANG_CFG["min_helix_frac"],
     shell:
         """
         python scripts/compute_tm_angle.py \\
-            --cif           {input.cif} \\
-            --dssp          {input.dssp} \\
-            --topology      {input.topology} \\
-            --protein       {wildcards.protein} \\
-            --conformation  {wildcards.conformation} \\
-            --sample-id     {wildcards.sample_id} \\
-            --output        {output.angle_csv} \\
-            --min-helix-frac {params.min_helix_frac} \\
-        > {log} 2>&1
-        """
-
-
-# ── Stage 12: Collect per-sample angles for one protein × conformation ────────
-
-def angle_csvs_for_protein_conformation(wildcards):
-    sample_ids = _sample_ids(wildcards.protein, wildcards.conformation)
-    return [
-        str(TM_ANG_DIR / wildcards.protein / wildcards.conformation / sid / "angle.csv")
-        for sid in sample_ids
-    ]
-
-
-rule collect_tm_angles:
-    input:
-        csvs = angle_csvs_for_protein_conformation,
-    output:
-        str(TM_ANG_DIR / "{protein}" / "{conformation}" / "angles.csv"),
-    log:
-        str(LOG_DIR / "collect_angles" / "{protein}" / "{conformation}.log"),
-    conda:
-        "envs/aggregate.yaml"
-    shell:
-        """
-        python scripts/collect_angles.py --output {output} {input.csvs} > {log} 2>&1
+        --batch-manifest {input.manifest} \\
+        --dssp-dir {params.dssp_dir} \\
+        --topology {input.topology} \\
+        --protein {wildcards.protein} \\
+        --conformation {wildcards.conformation} \\
+        --output {output.angles_csv} \\
+        --min-helix-frac {params.min_helix_frac} \\
+        >{log} 2>&1
         """
 
 
 # ── Stage 13: Fit GMM-3 and GMM-6 + BIC comparison (global) ──────────────────
+
 
 def all_angle_csv_inputs(wildcards):
     """
@@ -670,37 +738,35 @@ def all_angle_csv_inputs(wildcards):
     """
     sentinel = checkpoints.msa_checkpoint.get().output.sentinel
     proteins = read_proteins(sentinel)
-    targets  = []
+    targets = []
     for protein in proteins:
         for conformation in CONFORMATIONS:
-            _sample_ids(protein, conformation)   # ensures checkpoint is resolved
-            targets.append(
-                str(TM_ANG_DIR / protein / conformation / "angles.csv")
-            )
+            _sample_ids(protein, conformation)  # ensures checkpoint is resolved
+            targets.append(str(TM_ANG_DIR / protein / conformation / "angles.csv"))
     return targets
 
 
 rule gmm_analysis:
     input:
-        csvs = all_angle_csv_inputs,
+        csvs=all_angle_csv_inputs,
     output:
-        sentinel = str(GMM_DIR / "gmm.done"),
-        report   = str(GMM_DIR / "gmm_report.json"),
-    params:
-        out_dir = str(GMM_DIR),
-        n_init  = GMM_CFG["n_init"],
+        sentinel=str(GMM_DIR / "gmm.done"),
+        report=str(GMM_DIR / "gmm_report.json"),
     log:
         str(LOG_DIR / "gmm_analysis.log"),
     conda:
         "envs/tm_analysis.yaml"
+    params:
+        out_dir=str(GMM_DIR),
+        n_init=GMM_CFG["n_init"],
     shell:
         """
         python scripts/gmm_conformation.py \\
-            --input      {input.csvs} \\
-            --output-dir {params.out_dir} \\
-            --sentinel   {output.sentinel} \\
-            --n-init     {params.n_init} \\
-        > {log} 2>&1
+        --input {input.csvs} \\
+        --output-dir {params.out_dir} \\
+        --sentinel {output.sentinel} \\
+        --n-init {params.n_init} \\
+        >{log} 2>&1
         """
 
 
@@ -718,6 +784,7 @@ rule gmm_analysis:
 #   Two-checkpoint cascade:
 #     1. msa_checkpoint            → produces the protein list
 #     2. discover_boltz_outputs    → produces sample_ids per protein×conformation
+
 
 def all_final_outputs(wildcards):
     """
@@ -750,4 +817,4 @@ def all_final_outputs(wildcards):
 rule all:
     default_target: True
     input:
-        all_final_outputs
+        all_final_outputs,
