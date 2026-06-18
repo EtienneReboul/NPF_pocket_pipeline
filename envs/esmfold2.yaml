@@ -1,0 +1,29 @@
+name: esmfold2
+# ESMFold2-Fast compute environment.
+#
+# ESMFold2 (Biohub) uses a custom transformers fork installed as a transitive
+# dependency of the esm package — no separate transformers install needed.
+#
+# rdkit is installed via conda-forge (more reliable than the PyPI wheel and
+# avoids binary compatibility issues on HPC nodes).
+#
+# PyTorch CUDA: the esm package pins torch>=2.2.0 without a CUDA build tag,
+# so we install the CUDA-enabled wheel explicitly before esm to avoid getting
+# the CPU-only build. Adjust cu121 → cu118 / cu124 to match your cluster's
+# CUDA driver (check with: nvidia-smi | grep "CUDA Version").
+#
+# Python 3.12 is required strictly (esm pyproject: >=3.12,<3.13).
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - rdkit>=2023.9       # binary rdkit — more reliable via conda-forge than pip
+  - pip
+  - pip:
+      # Install CUDA-enabled torch BEFORE esm so pip does not pull the CPU wheel.
+      # Change cu121 to match your cluster's CUDA version (cu118, cu124, …).
+      - --extra-index-url https://download.pytorch.org/whl/cu121
+      - "torch>=2.2.0"
+      - "esm @ git+https://github.com/Biohub/esm.git@main"
+      - pyyaml>=6.0     # used by the SLURM batch runner to parse target.yaml
