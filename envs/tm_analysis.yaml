@@ -13,5 +13,6 @@ dependencies:
   - numpy>=1.26
   - pandas>=2.0
   - scikit-learn>=1.4    # GaussianMixture
+  - kneed>=0.7           # knee/elbow detection on BIC curve
   - matplotlib>=3.8
   - biopython>=1.83      # sequence alignment for TM range transfer (select_templates.py)
