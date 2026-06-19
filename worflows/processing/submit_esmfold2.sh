@@ -31,10 +31,11 @@
 #   bash submit_esmfold2.sh --gres gpu:l40s:1                 # L40S (default)
 #   bash submit_esmfold2.sh --gres gpu:tesla:1                # V100S (model is small)
 #
-# GPU COMPATIBILITY NOTE (esmfold2 env uses PyTorch>=2.2.0, CUDA>=12.1):
-#   L40S nodes  — driver 580 ✓  (verified 2026-06-16, same as boltz2 env)
-#   A100 nodes  — driver ~520 ✗  check CUDA version before using
-#   V100S nodes — driver ?   ✓  ESMFold2-Fast is small enough for 16 GB
+# GPU COMPATIBILITY NOTE (esmfold2 env uses PyTorch 2.12.1+cu130):
+#   L40S nodes  — driver 580 ✓  BUT only 44 GB VRAM — model loads (36 GB) but OOMs
+#                                on long sequences (confidence head needs ~10 GB extra)
+#   A100 nodes  — 80 GB VRAM, driver compatibility with cu130 TBD — try first
+#   V100S nodes — only 16 GB VRAM, far too small for this model
 #
 # The script is idempotent: predictions with prediction.done are skipped.
 # =============================================================================
@@ -240,6 +241,7 @@ MANIFEST="$MANIFEST"
 
 export HF_HOME="$HF_CACHE_DIR"
 export PYTHONWARNINGS="ignore::DeprecationWarning,ignore::FutureWarning"
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 echo "[\$(date)] Array task \$TASK_ID — batch size $BATCH_SIZE"
 echo "  Manifest : \$MANIFEST"
