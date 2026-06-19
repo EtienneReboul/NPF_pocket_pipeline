@@ -28,14 +28,15 @@
 #   bash submit_esmfold2.sh --batch-size 30                   # predictions per task
 #   bash submit_esmfold2.sh --max-concurrent 10               # max parallel tasks
 #   bash submit_esmfold2.sh --num-steps 20                    # faster / lower quality
-#   bash submit_esmfold2.sh --gres gpu:l40s:1                 # L40S (default)
-#   bash submit_esmfold2.sh --gres gpu:tesla:1                # V100S (model is small)
+#   bash submit_esmfold2.sh --gres gpu:h200:1                 # H200 80GB+ (default, recommended)
+#   bash submit_esmfold2.sh --gres gpu:l40s:1                 # L40S 44GB — OOMs on long sequences
 #
 # GPU COMPATIBILITY NOTE (esmfold2 env uses PyTorch 2.12.1+cu130):
-#   L40S nodes  — driver 580 ✓  BUT only 44 GB VRAM — model loads (36 GB) but OOMs
-#                                on long sequences (confidence head needs ~10 GB extra)
-#   A100 nodes  — 80 GB VRAM, driver compatibility with cu130 TBD — try first
-#   V100S nodes — only 16 GB VRAM, far too small for this model
+#   Available GRES on this cluster (sinfo -o "%P %G"):
+#     gpu:h200:4   — H200, 80–141 GB VRAM ✓  recommended (model=36 GB + activations)
+#     gpu:l40s:3/4 — L40S, 44 GB VRAM   ✗  model loads but OOMs on long sequences
+#     gpu:3g.20gb  — MIG slice, 20 GB    ✗  far too small
+#   Use: --gres gpu:h200:1
 #
 # The script is idempotent: predictions with prediction.done are skipped.
 # =============================================================================
@@ -64,7 +65,7 @@ MAX_CONCURRENT=10   # max array tasks running at once (SLURM % syntax)
 PARTITION="gpu"
 CPUS=4
 MEM="32G"
-GRES="gpu:l40s:1"
+GRES="gpu:h200:1"
 TIME=120            # minutes per task (conservative; ESMFold2 is fast)
 ACCOUNT=""
 
