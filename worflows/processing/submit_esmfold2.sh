@@ -18,7 +18,7 @@
 #     pip install esm@git+https://github.com/Biohub/esm.git@main)
 #   - HuggingFace weights pre-downloaded (run once on login node):
 #       module load conda && source activate esmfold2
-#       huggingface-cli download biohub/ESMFold2-Fast
+#       hf download biohub/ESMFold2-Fast
 #   - Run from the pipeline root directory
 #
 # Usage:

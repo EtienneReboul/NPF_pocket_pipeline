@@ -27,3 +27,8 @@ dependencies:
       - "torch>=2.2.0"
       - "esm @ git+https://github.com/Biohub/esm.git@main"
       - pyyaml>=6.0     # used by the SLURM batch runner to parse target.yaml
+      # Optional performance kernels (fused attention + RoPE — significant speedup on L40S).
+      # xformers wheels are hosted on the PyTorch index (same --extra-index-url above).
+      # flash-attn compiles on first install; needs --no-build-isolation (see below).
+      - xformers
+      - flash-attn
