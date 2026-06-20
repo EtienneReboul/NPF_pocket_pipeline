@@ -12,3 +12,6 @@ dependencies:
   - scikit-learn>=1.4    # re-fit GMM, silhouette scores
   - plotly>=5.20         # interactive scatter plots
   - ipywidgets>=8.0      # interactive widgets in JupyterLab
+  - gemmi>=0.6           # CIF/mmCIF parsing for template sequence extraction
+  - biopython>=1.83      # pairwise sequence alignment (Bio.Align)
+  - scipy>=1.12          # cdist, stats (Spearman correlation)

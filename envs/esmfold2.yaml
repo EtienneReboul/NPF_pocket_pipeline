@@ -9,8 +9,17 @@ name: esmfold2
 #
 # PyTorch CUDA: the esm package pins torch>=2.2.0 without a CUDA build tag,
 # so we install the CUDA-enabled wheel explicitly before esm to avoid getting
-# the CPU-only build. Adjust cu121 → cu118 / cu124 to match your cluster's
+# the CPU-only build. Adjust cu130 → cu128 / cu126 to match your cluster's
 # CUDA driver (check with: nvidia-smi | grep "CUDA Version").
+#
+# xformers must match the exact (PyTorch, CUDA) ABI — wheels live on the
+# PyTorch index and are resolved automatically when the same --extra-index-url
+# is set and torch is already pinned above.
+#
+# flash-attn provides the faster RoPE kernel used by esm's ESMC.
+# transformer-engine provides fused fp32-reduction LayerNorm used by ESMC.
+# Both are installed AFTER torch so the build/wheel selection can see the
+# installed torch version.
 #
 # Python 3.12 is required strictly (esm pyproject: >=3.12,<3.13).
 channels:
@@ -22,11 +31,11 @@ dependencies:
   - pip
   - pip:
       # Install CUDA-enabled torch BEFORE esm so pip does not pull the CPU wheel.
-      # Change cu121 to match your cluster's CUDA version (cu118, cu124, …).
-      - --extra-index-url https://download.pytorch.org/whl/cu121
+      # Change cu130 to match your cluster's CUDA version (cu126, cu128, …).
+      - --extra-index-url https://download.pytorch.org/whl/cu130
       - "torch>=2.2.0"
+      - xformers            # must match torch ABI — resolved via the index above
       - "esm @ git+https://github.com/Biohub/esm.git@main"
-      - pyyaml>=6.0     # used by the SLURM batch runner to parse target.yaml
-      # Optional performance kernel: fused attention (significant speedup on L40S).
-      # xformers wheels are hosted on the PyTorch index (same --extra-index-url above).
-      - xformers
+      - pyyaml>=6.0         # used by the SLURM batch runner to parse target.yaml
+      - flash-attn          # faster RoPE kernel for ESMC (pre-built wheels on PyPI)
+      - "transformer-engine[pytorch]"  # fused LayerNorm for ESMC
