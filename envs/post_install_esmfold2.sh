@@ -33,8 +33,9 @@ echo "[$(date)] torch    : $(python -c 'import torch; print(torch.__version__)')
 echo ""
 
 # ── Install ───────────────────────────────────────────────────────────────────
-echo "[$(date)] Installing flash-attn ..."
-pip install flash-attn --no-build-isolation
+# flash-attn is skipped: no pre-built wheel exists for torch2.12+cu130 yet,
+# and compiling from source requires nvcc 13.0 which the cluster does not have.
+# Impact: ESMC falls back to pure-PyTorch RoPE (functional, slightly slower).
 
 echo "[$(date)] Installing transformer-engine ..."
 pip install "transformer-engine[pytorch]"
