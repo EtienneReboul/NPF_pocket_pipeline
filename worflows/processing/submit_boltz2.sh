@@ -40,8 +40,7 @@
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-BOLTZ_INPUTS="data/boltz_inputs"
-BOLTZ_RESULTS="results/boltz"
+RUN_LABEL=""          # set via --run-label; appended to input/result dirs
 CONDA_ENV="boltz2"
 
 # Boltz-2 parameters (match config.yaml)
@@ -90,14 +89,24 @@ while [[ $# -gt 0 ]]; do
             DIFFUSION_SAMPLES="${1#--diffusion-samples=}"; shift ;;
         --test)
             TEST_MODE=true; shift ;;
+        --run-label)
+            RUN_LABEL="$2"; shift 2 ;;
+        --run-label=*)
+            RUN_LABEL="${1#--run-label=}"; shift ;;
         *)
             echo "ERROR: unknown argument '$1'"
             echo "Usage: bash submit_boltz2.sh [--dry-run] [--test] [--gres <profile>]"
             echo "                             [--batch-size N] [--max-concurrent N]"
-            echo "                             [--diffusion-samples N]"
+            echo "                             [--diffusion-samples N] [--run-label LABEL]"
             exit 1 ;;
     esac
 done
+
+# Derive input/result dirs from run label (mirrors Snakefile _run_suffix logic)
+SUFFIX=""
+[[ -n "$RUN_LABEL" ]] && SUFFIX="_${RUN_LABEL}"
+BOLTZ_INPUTS="data/boltz_inputs${SUFFIX}"
+BOLTZ_RESULTS="results/boltz${SUFFIX}"
 
 # ── Validate prerequisites ────────────────────────────────────────────────────
 if [[ ! -f "data/msa/msa.done" ]]; then
