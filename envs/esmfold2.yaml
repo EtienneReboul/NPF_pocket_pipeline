@@ -30,12 +30,15 @@ dependencies:
   - rdkit>=2023.9       # binary rdkit — more reliable via conda-forge than pip
   - pip
   - pip:
-      # Install CUDA-enabled torch BEFORE esm so pip does not pull the CPU wheel.
-      # Change cu130 to match your cluster's CUDA version (cu126, cu128, …).
-      - --extra-index-url https://download.pytorch.org/whl/cu130
+      # Use the PyTorch whl index as PRIMARY so xformers resolves to the
+      # cu130-tagged wheel (with real CUDA extensions) rather than the
+      # py3-none wheel on PyPI which has no CUDA extensions.
+      # PyPI is added back as a fallback via --extra-index-url.
+      - --index-url https://download.pytorch.org/whl/cu130
+      - --extra-index-url https://pypi.org/simple
       - "torch>=2.2.0"
-      - xformers            # must match torch ABI — resolved via the index above
+      - xformers            # resolves to cu130 ABI wheel from the PyTorch index
       - "esm @ git+https://github.com/Biohub/esm.git@main"
       - pyyaml>=6.0         # used by the SLURM batch runner to parse target.yaml
-      - flash-attn          # faster RoPE kernel for ESMC (pre-built wheels on PyPI)
-      - "transformer-engine[pytorch]"  # fused LayerNorm for ESMC
+      # flash-attn and transformer-engine require torch at build time so they
+      # must be installed AFTER env creation (see README / post-install below).
