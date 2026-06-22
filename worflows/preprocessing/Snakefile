@@ -46,10 +46,14 @@ FASTA_DIR = Path(DIRS["fasta"])
 MSA_DIR = Path(DIRS["msa"])
 INTERPRO_DIR = Path(DIRS["interpro"])
 TMPL_DIR = Path(DIRS["templates"])
-BOLTZ_IN_DIR = Path(DIRS["boltz_in"])
 LOG_DIR = Path(DIRS["logs"])
 BOLTZ_CFG = config["boltz"]
 CONFORMATIONS = list(config["templates"]["conformations"].keys())
+
+# Synthetic-template runs write inputs to a separate dir to avoid overwriting.
+_synth_cfg = config.get("templates", {}).get("synthetic", {})
+_run_suffix = ("_" + _synth_cfg["run_label"]) if _synth_cfg.get("enabled") else ""
+BOLTZ_IN_DIR = Path(DIRS["boltz_in"] + _run_suffix)
 
 MSA_SENTINEL = MSA_DIR / "msa.done"
 IPRO_SENTINEL = INTERPRO_DIR / "interproscan.done"
@@ -200,6 +204,7 @@ rule prepare_boltz_input:
         --protein-entity-id {params.protein_entity_id} \\
         --pocket-max-distance {params.pocket_max_distance} \\
         --pocket-force {params.pocket_force} \\
+        --synthetic-templates-config config.yaml \\
         >{log} 2>&1
         """
 
