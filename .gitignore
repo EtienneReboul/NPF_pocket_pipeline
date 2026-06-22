@@ -7,6 +7,7 @@ data/sequences/
 data/msa/
 data/interpro/
 data/templates/
+data/synthetic_templates
 data/boltz_inputs/
 results/
 results_03_06_2026/
