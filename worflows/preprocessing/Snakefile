@@ -55,6 +55,10 @@ _synth_cfg = config.get("templates", {}).get("synthetic", {})
 _run_suffix = ("_" + _synth_cfg["run_label"]) if _synth_cfg.get("enabled") else ""
 BOLTZ_IN_DIR = Path(DIRS["boltz_in"] + _run_suffix)
 
+# Stripped synthetic templates land here (protein-only CIFs safe for Boltz-2 template validation)
+SYNTH_TMPL_DIR = Path("data/synthetic_templates")
+SYNTH_TMPL_SENTINEL = str(SYNTH_TMPL_DIR / "stripped.done")
+
 MSA_SENTINEL = MSA_DIR / "msa.done"
 IPRO_SENTINEL = INTERPRO_DIR / "interproscan.done"
 TMPL_SENTINEL = TMPL_DIR / "templates.done"
@@ -141,7 +145,34 @@ rule run_interproscan:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAGE 3: Template download
+# STAGE 3a: Strip synthetic template ligands (only when synthetic run enabled)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+if _synth_cfg.get("enabled"):
+    rule strip_synthetic_templates:
+        output:
+            sentinel=SYNTH_TMPL_SENTINEL,
+        log:
+            str(LOG_DIR / "strip_synthetic_templates.log"),
+        conda:
+            "../../envs/preprocessing.yaml"
+        params:
+            out_dir=str(SYNTH_TMPL_DIR),
+            chimerax=config.get("chimerax_bin", "ChimeraX"),
+        shell:
+            """
+            python scripts/prepare_synthetic_templates.py \\
+            --config config.yaml \\
+            --out-dir {params.out_dir} \\
+            --chimerax-bin {params.chimerax} \\
+            --sentinel {output.sentinel} \\
+            >{log} 2>&1
+            """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3b: Template download
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -176,6 +207,8 @@ rule prepare_boltz_input:
         a3m=str(MSA_DIR / "a3m" / "{protein}.a3m"),
         cdd_summary=str(INTERPRO_DIR / "cdd_summary.json"),
         tmpl_done=str(TMPL_SENTINEL),
+        **({} if not _synth_cfg.get("enabled") else
+           {"synth_stripped": SYNTH_TMPL_SENTINEL}),
     output:
         yaml=str(BOLTZ_IN_DIR / "{protein}" / "{conformation}" / "target.yaml"),
     log:
@@ -189,6 +222,7 @@ rule prepare_boltz_input:
         protein_entity_id=BOLTZ_CFG["protein_entity_id"],
         pocket_max_distance=BOLTZ_CFG["pocket_max_distance"],
         pocket_force=str(BOLTZ_CFG["pocket_force"]).lower(),
+        synth_tmpl_dir=str(SYNTH_TMPL_DIR) if _synth_cfg.get("enabled") else "",
     shell:
         """
         python scripts/make_boltz_input.py \\
@@ -204,7 +238,7 @@ rule prepare_boltz_input:
         --protein-entity-id {params.protein_entity_id} \\
         --pocket-max-distance {params.pocket_max_distance} \\
         --pocket-force {params.pocket_force} \\
-        --synthetic-templates-config config.yaml \\
+        $([ -n "{params.synth_tmpl_dir}" ] && echo "--synthetic-templates-config config.yaml --synthetic-templates-dir {params.synth_tmpl_dir}") \\
         >{log} 2>&1
         """
 

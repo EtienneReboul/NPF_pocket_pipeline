@@ -27,6 +27,7 @@ Usage (called by Snakemake rule `prepare_boltz_input`):
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 import yaml # pyright: ignore[reportMissingModuleSource]
 from Bio import SeqIO # pyright: ignore[reportMissingImports]
@@ -56,6 +57,9 @@ def parse_args():
     p.add_argument("--synthetic-templates-config", default=None,
                    help="Path to config YAML containing templates.synthetic "
                         "(per-clade CIF paths from a previous run)")
+    p.add_argument("--synthetic-templates-dir", default=None,
+                   help="Directory of stripped synthetic CIFs produced by "
+                        "prepare_synthetic_templates.py ({clade}_{state}.cif)")
     return p.parse_args()
 
 
@@ -108,23 +112,24 @@ CONFORMATION_TO_STATE: dict[str, str] = {
 }
 
 
-def get_protein_clade(summary_path: Path, protein_name: str) -> str | None:
+def get_protein_clade(summary_path: Path, protein_name: str) -> Optional[str]:
     """Return the CDD clade accession (e.g. 'cd17413') for this protein, or None."""
     data = json.loads(summary_path.read_text())
     return data.get(protein_name, {}).get("accession")
 
 
 def get_synthetic_template_path(
-    config_path: str | None,
-    clade: str | None,
+    config_path: Optional[str],
+    clade: Optional[str],
     conformation: str,
-) -> str | None:
+    stripped_dir: Optional[str] = None,
+) -> Optional[str]:
     """
-    Look up templates.synthetic.per_clade[clade][state] in config_path,
-    where state is derived from conformation via CONFORMATION_TO_STATE.
+    Return the stripped synthetic template CIF path for this clade/conformation.
 
-    All apo/holo variants of the same structural state share one template CIF;
-    ligand handling is done separately by build_yaml based on is_holo().
+    When stripped_dir is given (set by the Snakefile after strip_synthetic_templates
+    runs), return {stripped_dir}/{clade}_{state}.cif — guaranteed ligand-free.
+    Otherwise fall back to the raw path from config (for backwards compatibility).
     """
     if not config_path or not clade:
         return None
@@ -133,8 +138,15 @@ def get_synthetic_template_path(
     if not synth.get("enabled", False):
         return None
     state = CONFORMATION_TO_STATE.get(conformation, conformation)
-    path = synth.get("per_clade", {}).get(clade, {}).get(state)
-    if path and not Path(path).exists():
+    if not synth.get("per_clade", {}).get(clade, {}).get(state):
+        return None
+
+    if stripped_dir:
+        path = str(Path(stripped_dir) / f"{clade}_{state}.cif")
+    else:
+        path = synth["per_clade"][clade][state]
+
+    if not Path(path).exists():
         print(
             f"[boltz_input] WARNING: synthetic template for {clade}/{state} "
             f"({conformation}) not found on disk: {path}"
@@ -253,7 +265,8 @@ def main():
 
     clade = get_protein_clade(summary_path, args.protein_name)
     synth_path = get_synthetic_template_path(
-        args.synthetic_templates_config, clade, args.conformation
+        args.synthetic_templates_config, clade, args.conformation,
+        stripped_dir=args.synthetic_templates_dir,
     )
     if synth_path:
         cwd = Path.cwd()
