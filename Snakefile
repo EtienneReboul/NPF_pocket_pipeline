@@ -63,14 +63,20 @@ FASTA_DIR = Path(DIRS["fasta"])
 MSA_DIR = Path(DIRS["msa"])
 INTERPRO_DIR = Path(DIRS["interpro"])
 TMPL_DIR = Path(DIRS["templates"])
-BOLTZ_IN_DIR = Path(DIRS["boltz_in"])
-BOLTZ_OUT = Path(DIRS["boltz_out"])
-MIN_DIR = Path(DIRS["minimized"])
-PLIP_DIR = Path(DIRS["plip"])
-DSSP_DIR = Path(DIRS["dssp"])
-TM_ANG_DIR = Path(DIRS["tm_angles"])
-GMM_DIR = Path(DIRS["gmm"])
 LOG_DIR = Path(DIRS["logs"])
+
+# When synthetic templates are enabled, all input + result directories get a
+# label suffix so that outputs never overwrite a previous run.
+_synth_cfg = config.get("templates", {}).get("synthetic", {})
+_run_suffix = ("_" + _synth_cfg["run_label"]) if _synth_cfg.get("enabled") else ""
+
+BOLTZ_IN_DIR = Path(DIRS["boltz_in"]    + _run_suffix)
+BOLTZ_OUT    = Path(DIRS["boltz_out"]   + _run_suffix)
+MIN_DIR      = Path(DIRS["minimized"]   + _run_suffix)
+PLIP_DIR     = Path(DIRS["plip"]        + _run_suffix)
+DSSP_DIR     = Path(DIRS["dssp"]        + _run_suffix)
+TM_ANG_DIR   = Path(DIRS["tm_angles"]   + _run_suffix)
+GMM_DIR      = Path(DIRS["gmm"]         + _run_suffix)
 
 # ── Config shortcuts ───────────────────────────────────────────────────────────
 BOLTZ_CFG = config["boltz"]
@@ -280,6 +286,7 @@ rule prepare_boltz_input:
         --protein-entity-id {params.protein_entity_id} \\
         --pocket-max-distance {params.pocket_max_distance} \\
         --pocket-force {params.pocket_force} \\
+        --synthetic-templates-config config.yaml \\
         >{log} 2>&1
         """
 

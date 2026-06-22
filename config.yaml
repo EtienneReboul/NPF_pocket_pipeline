@@ -76,6 +76,58 @@ templates:
       fallback:  ["4JR9", "4IU8", "4IU9"]  # C — NarK apo (Zheng 2013) / NarU inward-open chain (Yan 2013)
       # 23DA (AtGTR1 apo pH8, Nan/Li 2026) — HPUB, deposited 2026-02-01, add when released
 
+  # ── Synthetic templates (per-clade, per-structural-state) ─────────────────
+  # Three structural states drive all 6 Boltz runs:
+  #   outward_open → outward_open_apo
+  #   occluded     → outward_occluded_holo, occluded_apo, occluded_holo,
+  #                   inward_occluded_holo
+  #   inward_open  → inward_open_apo
+  # Apo and holo runs of the same state share one backbone template; the
+  # pipeline strips or keeps the ligand automatically based on conformation name.
+  # Paths are relative to the project root.
+  # Use print_medoids() in the gate_distances notebook to get the cif_path values.
+  synthetic:
+    enabled: true
+    run_label: "synth"      # appended to all result dirs when enabled (e.g. results/boltz_synth)
+    # per_clade:
+    #   cd17413:              # MFS_NPF6
+    #     outward_open: "results_03_06_2026/boltz/NPF6.3_Q05085/outward_open_apo/boltz_out/predictions/target/model_0.cif"
+    #     occluded:     "results_03_06_2026/boltz/NPF6.3_Q05085/occluded_apo/boltz_out/predictions/target/model_0.cif"
+    #     inward_open:  "results_03_06_2026/boltz/NPF6.3_Q05085/inward_open_apo/boltz_out/predictions/target/model_0.cif"
+    #   cd17414:              # MFS_NPF4
+    #     outward_open: "results_03_06_2026/boltz/NPF4.1_Q9LSF0/outward_open_apo/boltz_out/predictions/target/model_0.cif"
+    #     occluded:     "results_03_06_2026/boltz/NPF4.1_Q9LSF0/occluded_apo/boltz_out/predictions/target/model_0.cif"
+    #     inward_open:  "results_03_06_2026/boltz/NPF4.1_Q9LSF0/inward_open_apo/boltz_out/predictions/target/model_0.cif"
+    per_clade:
+      cd17418:              # MFS_NPF8    — representative: NPF8.1_Q9M390
+        outward_open: "results/boltz/NPF8.1_Q9M390/outward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_14.cif"
+        occluded:     "results/boltz/NPF8.1_Q9M390/occluded_apo/boltz_out/boltz_results_target/predictions/target/target_model_1.cif"
+        inward_open:  "results/boltz/NPF8.1_Q9M390/inward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_45.cif"
+      cd17419:              # MFS_NPF7    — representative: NPF7.2_Q8GXN2
+        outward_open: "results/boltz/NPF7.2_Q8GXN2/outward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_25.cif"
+        occluded:     "results/boltz/NPF7.2_Q8GXN2/outward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_46.cif"
+        inward_open:  "results/boltz/NPF7.2_Q8GXN2/outward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_40.cif"
+      cd17413:              # MFS_NPF6    — representative: NPF6.4_Q9LVE0
+        outward_open: "results/boltz/NPF6.4_Q9LVE0/inward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_48.cif"
+        occluded:     "results/boltz/NPF6.4_Q9LVE0/inward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_46.cif"
+        inward_open:  "results/boltz/NPF6.4_Q9LVE0/outward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_32.cif"
+      cd17417:              # MFS_NPF5    — representative: NPF5.14_Q8VZE2
+        outward_open: "results/boltz/NPF5.14_Q8VZE2/inward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_1.cif"
+        occluded:     "results/boltz/NPF5.14_Q8VZE2/outward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_19.cif"
+        inward_open:  "results/boltz/NPF5.14_Q8VZE2/occluded_apo/boltz_out/boltz_results_target/predictions/target/target_model_25.cif"
+      cd17414:              # MFS_NPF4    — composite: NPF4.7 (out+occ) / NPF4.4 (in)
+        outward_open: "results/boltz/NPF4.7_Q9FM20/outward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_10.cif"
+        occluded:     "results/boltz/NPF4.7_Q9FM20/occluded_apo/boltz_out/boltz_results_target/predictions/target/target_model_46.cif"
+        inward_open:  "results/boltz/NPF4.4_Q56XQ6/outward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_47.cif"
+      cd17415:              # MFS_NPF3    — representative: NPF3.1_Q9SX20
+        outward_open: "results/boltz/NPF3.1_Q9SX20/inward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_4.cif"
+        occluded:     "results/boltz/NPF3.1_Q9SX20/inward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_0.cif"
+        inward_open:  "results/boltz/NPF3.1_Q9SX20/inward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_49.cif"
+      cd17416:              # MFS_NPF1_2  — representative: NPF1.1_Q8LPL2
+        outward_open: "results/boltz/NPF1.1_Q8LPL2/inward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_43.cif"
+        occluded:     "results/boltz/NPF1.1_Q8LPL2/outward_occluded_holo/boltz_out/boltz_results_target/predictions/target/target_model_19.cif"
+        inward_open:  "results/boltz/NPF1.1_Q8LPL2/outward_open_apo/boltz_out/boltz_results_target/predictions/target/target_model_7.cif"
+
 # ── Stage 4: Boltz-2 ─────────────────────────────────────────────────────────
 boltz:
   # Ligand SMILES — used for all "holo" conformations

@@ -53,6 +53,9 @@ def parse_args():
     p.add_argument("--pocket-max-distance", type=float, default=6.0)
     p.add_argument("--pocket-force",        type=lambda x: x.lower() == "true",
                    default=True)
+    p.add_argument("--synthetic-templates-config", default=None,
+                   help="Path to config YAML containing templates.synthetic "
+                        "(per-clade CIF paths from a previous run)")
     return p.parse_args()
 
 
@@ -90,6 +93,54 @@ def load_residues_from_summary(summary_path: Path, protein_name: str) -> list[in
         )
         return []
     return data[protein_name].get("residues", [])
+
+
+# Maps the 6 Boltz conformation names → 3 structural template states.
+# Apo and holo variants of the same state share one backbone template;
+# ligand inclusion is handled separately by is_holo().
+CONFORMATION_TO_STATE: dict[str, str] = {
+    "outward_open_apo":      "outward_open",
+    "outward_occluded_holo": "occluded",
+    "occluded_apo":          "occluded",
+    "occluded_holo":         "occluded",
+    "inward_occluded_holo":  "occluded",
+    "inward_open_apo":       "inward_open",
+}
+
+
+def get_protein_clade(summary_path: Path, protein_name: str) -> str | None:
+    """Return the CDD clade accession (e.g. 'cd17413') for this protein, or None."""
+    data = json.loads(summary_path.read_text())
+    return data.get(protein_name, {}).get("accession")
+
+
+def get_synthetic_template_path(
+    config_path: str | None,
+    clade: str | None,
+    conformation: str,
+) -> str | None:
+    """
+    Look up templates.synthetic.per_clade[clade][state] in config_path,
+    where state is derived from conformation via CONFORMATION_TO_STATE.
+
+    All apo/holo variants of the same structural state share one template CIF;
+    ligand handling is done separately by build_yaml based on is_holo().
+    """
+    if not config_path or not clade:
+        return None
+    cfg = yaml.safe_load(Path(config_path).read_text())
+    synth = cfg.get("templates", {}).get("synthetic", {})
+    if not synth.get("enabled", False):
+        return None
+    state = CONFORMATION_TO_STATE.get(conformation, conformation)
+    path = synth.get("per_clade", {}).get(clade, {}).get(state)
+    if path and not Path(path).exists():
+        print(
+            f"[boltz_input] WARNING: synthetic template for {clade}/{state} "
+            f"({conformation}) not found on disk: {path}"
+        )
+        return None
+    return path
 
 
 def collect_template_paths(templates_dir: Path, output_path: Path) -> list[str]:
@@ -199,6 +250,16 @@ def main():
     sequence         = load_sequence(fasta_path)
     binding_residues = load_residues_from_summary(summary_path, args.protein_name)
     template_paths   = collect_template_paths(templates_dir, output_path)
+
+    clade = get_protein_clade(summary_path, args.protein_name)
+    synth_path = get_synthetic_template_path(
+        args.synthetic_templates_config, clade, args.conformation
+    )
+    if synth_path:
+        cwd = Path.cwd()
+        rel = str(Path(synth_path).resolve().relative_to(cwd))
+        template_paths = [rel] + template_paths
+        print(f"[boltz_input] prepending synthetic template for clade {clade}: {rel}")
 
     doc = build_yaml(
         sequence          = sequence,
