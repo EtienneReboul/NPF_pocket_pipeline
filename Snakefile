@@ -362,7 +362,6 @@ checkpoint discover_boltz_outputs:
             / wildcards.protein
             / wildcards.conformation
             / "boltz_out"
-            / "predictions"
         )
         cifs = sorted(pred_root.glob("**/*.cif")) if pred_root.exists() else []
         if not cifs:

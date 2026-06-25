@@ -40,19 +40,27 @@ if Path("config.local.yaml").exists():
 
 # ── Directory shortcuts ────────────────────────────────────────────────────────
 DIRS         = config["dirs"]
-MSA_DIR      = Path(DIRS["msa"])
-BOLTZ_OUT    = Path(DIRS["boltz_out"])
-SANITIZED_DIR = Path(DIRS.get("sanitized", "results/sanitized"))
-MIN_DIR      = Path(DIRS["minimized"])
-PLIP_DIR     = Path(DIRS["plip"])
-INTERPRO_DIR = Path(DIRS["interpro"])
-DSSP_DIR     = Path(DIRS["dssp"])
-TM_ANG_DIR   = Path(DIRS["tm_angles"])
-GMM_DIR      = Path(DIRS["gmm"])
-REANN_DIR    = Path(DIRS.get("reannotated", "results/reannotated"))
-LOG_DIR      = Path(DIRS["logs"])
 
+# Synthetic-template runs write to separate _synth directories to avoid
+# overwriting outputs from the first run (mirrors root Snakefile logic).
+_synth_cfg   = config.get("templates", {}).get("synthetic", {})
+_run_suffix  = ("_" + _synth_cfg["run_label"]) if _synth_cfg.get("enabled") else ""
+
+# Input-only dirs (from preprocessing) — never suffixed
+MSA_DIR      = Path(DIRS["msa"])
+INTERPRO_DIR = Path(DIRS["interpro"])
 FASTA_DIR    = Path(DIRS["fasta"])
+
+# Output dirs — suffixed when synthetic run is enabled
+BOLTZ_OUT     = Path(DIRS["boltz_out"]                          + _run_suffix)
+SANITIZED_DIR = Path(DIRS.get("sanitized", "results/sanitized") + _run_suffix)
+MIN_DIR       = Path(DIRS["minimized"]                          + _run_suffix)
+PLIP_DIR      = Path(DIRS["plip"]                               + _run_suffix)
+DSSP_DIR      = Path(DIRS["dssp"]                               + _run_suffix)
+TM_ANG_DIR    = Path(DIRS["tm_angles"]                          + _run_suffix)
+GMM_DIR       = Path(DIRS["gmm"]                                + _run_suffix)
+REANN_DIR     = Path(DIRS.get("reannotated", "results/reannotated") + _run_suffix)
+LOG_DIR       = Path(DIRS["logs"])
 
 PLIP_CFG     = config["plip"]
 VIZ_CFG      = config["visualization"]
