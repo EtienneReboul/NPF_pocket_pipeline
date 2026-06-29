@@ -179,6 +179,10 @@ tm_angle:
 gmm:
   n_init: 20                       # GMM restarts for robust convergence
 
+# ── Stage 14: Menger curvature (per protein, all conformations pooled) ────────
+menger:
+  spacing: 2                       # triplet spacing (2 = every other Cα)
+
 # ── Output directories ────────────────────────────────────────────────────────
 dirs:
   fasta:      "data/sequences"            # UniProt FASTA + per-protein FASTA
@@ -193,4 +197,5 @@ dirs:
   tm_angles:  "results/tm_angles"         # TM2/TM8 angle CSVs per sample + conformation
   gmm:        "results/gmm"               # GMM report, plots, BIC comparison
   reannotated: "results/reannotated"     # CIF symlinks reorganised by GMM conformation
+  menger:     "results/menger_curvature" # per-residue curvature CSVs + NPY arrays
   logs:       "logs"
