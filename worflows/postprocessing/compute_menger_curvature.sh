@@ -42,7 +42,6 @@ cd "$REPO_ROOT"
 # ── Defaults ──────────────────────────────────────────────────────────────────
 BOLTZ_OUT="results/boltz_synth"
 OUT_DIR="results/menger_curvature_synth"
-BOLTZ_DIR_OVERRIDE=""
 MSA_SENTINEL="data/msa/msa.done"
 COMPUTE_SCRIPT="scripts/compute_menger_curvature.py"
 SPACING=2
@@ -71,6 +70,8 @@ while [[ $# -gt 0 ]]; do
         --python)    PYTHON="$2"; shift ;;
         --protein)   FILTER_PROTEIN="$2"; shift ;;
         --spacing)   SPACING="$2"; shift ;;
+        --boltz-dir) BOLTZ_OUT="$2"; shift ;;
+        --out-dir)   OUT_DIR="$2"; shift ;;
         -h|--help)   usage ;;
         *)           echo "[menger] Unknown argument: $1" >&2; usage ;;
     esac
