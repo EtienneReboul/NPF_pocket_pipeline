@@ -152,7 +152,7 @@ chimerax_bin: "/path/to/ChimeraX"
 # ── Stage 6: PLIP ────────────────────────────────────────────────────────────
 plip:
   image: "docker.io/pharmai/plip:latest"
-  docker_memory: "16g"
+  docker_memory: "4g"
   docker_platform: "linux/amd64"   # needed on Apple Silicon; leave "" for native
   receptor_chain: "A"
   ligand_chain: "L"
