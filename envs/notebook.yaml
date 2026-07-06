@@ -15,3 +15,7 @@ dependencies:
   - gemmi>=0.6           # CIF/mmCIF parsing for template sequence extraction
   - biopython>=1.83      # pairwise sequence alignment (Bio.Align)
   - scipy>=1.12          # cdist, stats (Spearman correlation)
+  - kneed>=0.8           # Kneedle elbow/knee detection for DBSCAN eps selection
+  - umap-learn>=0.5      # UMAP sequence-landscape projection (Jaccard metric on one-hot MSA)
+  - pip:
+      - polyleven>=0.8   # fast Levenshtein distance for MSA cluster identity (AF-Cluster style)
