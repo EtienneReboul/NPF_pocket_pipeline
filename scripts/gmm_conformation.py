@@ -128,13 +128,22 @@ def find_best_k(bic_by_k: dict[int, float]) -> int:
     """Return the knee of the BIC curve (convex, decreasing).
     Falls back to the global minimum if no knee is detected.
     Requires ≥3 k values for KneeLocator to be meaningful.
+
+    Uses KneeLocator's polynomial interpolation (rather than its default
+    interp1d) to fit a smooth model of the curve before locating the knee —
+    interp1d follows every point exactly, so a single noisy BIC value (e.g.
+    a bad n_init restart) can look like a spurious local knee. The
+    polynomial degree is capped relative to the number of k's swept so the
+    fit still smooths rather than re-interpolating the noise.
     """
     ks   = sorted(bic_by_k)
     bics = [bic_by_k[k] for k in ks]
 
     if len(ks) >= 3:
+        degree = min(7, max(1, len(ks) - 3))
         try:
-            kl = KneeLocator(ks, bics, curve="convex", direction="decreasing")
+            kl = KneeLocator(ks, bics, curve="convex", direction="decreasing",
+                              interp_method="polynomial", polynomial_degree=degree)
             if kl.knee is not None:
                 return int(kl.knee)
         except Exception as e:

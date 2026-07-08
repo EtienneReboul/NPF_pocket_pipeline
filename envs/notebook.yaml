@@ -17,5 +17,6 @@ dependencies:
   - scipy>=1.12          # cdist, stats (Spearman correlation)
   - kneed>=0.8           # Kneedle elbow/knee detection for DBSCAN eps selection
   - umap-learn>=0.5      # UMAP sequence-landscape projection (Jaccard metric on one-hot MSA)
+  - hdbscan>=0.8         # DBCV (validity_index) for HDBSCAN hyperparameter tuning
   - pip:
       - polyleven>=0.8   # fast Levenshtein distance for MSA cluster identity (AF-Cluster style)
