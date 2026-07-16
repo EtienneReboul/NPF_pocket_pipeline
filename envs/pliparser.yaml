@@ -6,4 +6,4 @@ dependencies:
   - python=3.11
   - pip
   - pip:
-      - python-pliparser
+      - python-pliparser>=0.1.4

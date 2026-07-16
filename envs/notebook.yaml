@@ -20,3 +20,4 @@ dependencies:
   - hdbscan>=0.8         # DBCV (validity_index) for HDBSCAN hyperparameter tuning
   - pip:
       - polyleven>=0.8   # fast Levenshtein distance for MSA cluster identity (AF-Cluster style)
+      - kaleido>=0.2      # static PNG export for plotly figures (fig.write_image)
