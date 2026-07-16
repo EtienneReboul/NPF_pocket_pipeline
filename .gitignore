@@ -14,6 +14,9 @@ results_03_06_2026/
 logs/
 notebook/
 boltz_inputs_synth/
+data/boltz_inputs_synth_iter_2
+data/synthetic_templates_manual
+data/synthetic_templates_synth_iter_2
 
 # ── Snakemake internals ───────────────────────────────────────────────────────
 .snakemake/
