@@ -102,6 +102,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Volta-class GPUs (e.g. Tesla/V100(S), sm_70) need --no_kernels: boltz's default
+# custom CUDA kernels require a newer compute capability than sm_70 provides.
+NO_KERNELS_FLAG=""
+[[ "$GRES" == *tesla* ]] && NO_KERNELS_FLAG="--no_kernels"
+
 # Derive input/result dirs from run label (mirrors Snakefile _run_suffix logic)
 SUFFIX=""
 [[ -n "$RUN_LABEL" ]] && SUFFIX="_${RUN_LABEL}"
@@ -261,9 +266,14 @@ WRAPPER
 echo "[\$(date)] Array task \$TASK_ID — batch size $BATCH_SIZE"
 echo "  Manifest: \$MANIFEST"
 
-# Activate conda
-module load conda
-source activate "$CONDA_ENV"
+# Activate conda (module system on IFB; plain miniforge3 install on Pangloss)
+if command -v module >/dev/null 2>&1 && module avail conda 2>&1 | grep -qi 'conda'; then
+    module load conda
+    source activate "$CONDA_ENV"
+else
+    source "\$HOME/miniforge3/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV"
+fi
 
 echo "[\$(date)] Python : \$(which python)"
 echo "[\$(date)] CUDA   : \$(python -c 'import torch; print(torch.cuda.is_available())')"
@@ -294,8 +304,8 @@ while IFS='|' read -r yaml out_dir done_file; do
         --out_dir "\$out_dir" \\
         --recycling_steps $RECYCLING_STEPS \\
         --diffusion_samples $DIFFUSION_SAMPLES \\
-        --output_format $OUTPUT_FORMAT
-    # --no_kernels  ← uncomment for V100S or CPU; not needed for L40S/A100
+        --output_format $OUTPUT_FORMAT \\
+        $NO_KERNELS_FLAG
 
     echo "\$(date): prediction finished" > "\$done_file"
     echo "[\$(date)] DONE:  \$protein / \$conf"
