@@ -17,6 +17,7 @@ boltz_inputs_synth/
 data/boltz_inputs_synth_iter_2
 data/synthetic_templates_manual
 data/synthetic_templates_synth_iter_2
+data/boltz_inputs_default
 
 # ── Snakemake internals ───────────────────────────────────────────────────────
 .snakemake/

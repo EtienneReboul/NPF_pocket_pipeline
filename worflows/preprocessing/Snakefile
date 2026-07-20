@@ -59,6 +59,13 @@ BOLTZ_IN_DIR = Path(DIRS["boltz_in"] + _run_suffix)
 SYNTH_TMPL_DIR = Path("data/synthetic_templates")
 SYNTH_TMPL_SENTINEL = str(SYNTH_TMPL_DIR / "stripped.done")
 
+# Standard/default-template run: standalone, outside the conformation matrix.
+# Uses each protein's own top ColabFold PDB70 hits (data/msa/pdb/{protein}.m8) as
+# templates, with no pocket constraint and no curated/synthetic template override.
+_default_cfg = config.get("templates", {}).get("default_run", {})
+DEFAULT_TMPL_DIR = Path("data/templates/default")
+DEFAULT_BOLTZ_IN_DIR = Path(DIRS["boltz_in"] + "_default")
+
 MSA_SENTINEL = MSA_DIR / "msa.done"
 IPRO_SENTINEL = INTERPRO_DIR / "interproscan.done"
 TMPL_SENTINEL = TMPL_DIR / "templates.done"
@@ -241,6 +248,63 @@ rule prepare_boltz_input:
         $([ -n "{params.synth_tmpl_dir}" ] && echo "--synthetic-templates-config config.yaml --synthetic-templates-dir {params.synth_tmpl_dir}") \\
         >{log} 2>&1
         """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 4b: Standard Boltz-2 run (default .m8 templates, no restraint) — optional
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+if _default_cfg.get("enabled"):
+
+    rule prepare_default_boltz_input:
+        input:
+            fasta=str(FASTA_DIR / "{protein}.fasta"),
+            a3m=str(MSA_DIR / "a3m" / "{protein}.a3m"),
+            m8=str(MSA_DIR / "pdb" / "{protein}.m8"),
+        output:
+            apo=str(DEFAULT_BOLTZ_IN_DIR / "{protein}" / "apo" / "target.yaml"),
+            holo=str(DEFAULT_BOLTZ_IN_DIR / "{protein}" / "holo" / "target.yaml"),
+        log:
+            str(LOG_DIR / "boltz_input_default" / "{protein}.log"),
+        conda:
+            "../../envs/preprocessing.yaml"
+        params:
+            templates_dir=lambda wc: str(DEFAULT_TMPL_DIR / wc.protein),
+            top_n=_default_cfg.get("top_n", 5),
+            ligand_smiles=BOLTZ_CFG["ligand_smiles"],
+            ligand_entity_id=BOLTZ_CFG["ligand_entity_id"],
+            protein_entity_id=BOLTZ_CFG["protein_entity_id"],
+        shell:
+            """
+            python scripts/make_default_boltz_input.py \\
+            --fasta {input.fasta} \\
+            --a3m {input.a3m} \\
+            --m8 {input.m8} \\
+            --protein-name {wildcards.protein} \\
+            --templates-dir {params.templates_dir} \\
+            --top-n-templates {params.top_n} \\
+            --output-apo {output.apo} \\
+            --output-holo {output.holo} \\
+            --ligand-smiles '{params.ligand_smiles}' \\
+            --ligand-entity-id {params.ligand_entity_id} \\
+            --protein-entity-id {params.protein_entity_id} \\
+            >{log} 2>&1
+            """
+
+    def all_default_targets(wildcards):
+        """One apo + one holo target.yaml per protein, using default .m8 templates."""
+        sentinel = checkpoints.msa_checkpoint.get().output.sentinel
+        proteins = read_proteins(sentinel)
+        targets = []
+        for protein in proteins:
+            targets.append(str(DEFAULT_BOLTZ_IN_DIR / protein / "apo" / "target.yaml"))
+            targets.append(str(DEFAULT_BOLTZ_IN_DIR / protein / "holo" / "target.yaml"))
+        return targets
+
+    rule default_boltz_inputs:
+        input:
+            all_default_targets,
 
 
 # ─────────────────────────────────────────────────────────────────────────────

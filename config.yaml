@@ -42,6 +42,15 @@ interproscan:
 # ── Stage 3: Template download ────────────────────────────────────────────────
 templates:
   efflux: false                    # set true to merge MFS-MDR efflux pump templates
+
+  # Standard/default-template Boltz-2 run (Stage 4b, standalone — see
+  # rule `default_boltz_inputs` in worflows/preprocessing/Snakefile).
+  # Uses each protein's own top ColabFold PDB70 hits from data/msa/pdb/{protein}.m8
+  # as templates, with no pocket constraint and no curated/synthetic template
+  # override. Produces data/boltz_inputs_default/{protein}/{apo,holo}/target.yaml.
+  default_run:
+    enabled: true
+    top_n: 5                       # top unique PDB hits from the .m8 file to use as templates
   # Conformations and their PDB codes.
   # Folder names containing "holo" → ligand included in Boltz-2 YAML.
   # Folder names containing "apo"  → protein only.
