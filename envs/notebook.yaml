@@ -18,6 +18,7 @@ dependencies:
   - kneed>=0.8           # Kneedle elbow/knee detection for DBSCAN eps selection
   - umap-learn>=0.5      # UMAP sequence-landscape projection (Jaccard metric on one-hot MSA)
   - hdbscan>=0.8         # DBCV (validity_index) for HDBSCAN hyperparameter tuning
+  - optuna>=3.6          # Bayesian (TPE) hyperparameter search for HDBSCAN, scored by DBCV
   - pip:
       - polyleven>=0.8   # fast Levenshtein distance for MSA cluster identity (AF-Cluster style)
       - kaleido>=0.2      # static PNG export for plotly figures (fig.write_image)
