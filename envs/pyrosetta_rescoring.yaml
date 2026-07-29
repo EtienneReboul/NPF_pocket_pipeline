@@ -1,0 +1,31 @@
+name: pyrosetta_rescoring
+# PyRosetta rescoring environment (rescoring/ — Tier 3 of HANDOFF_rescoring.md).
+#
+# PyRosetta itself is NOT listed below: it requires an academic license and
+# isn't on conda-forge/PyPI as a plain dependency. After creating this env,
+# install it with the official installer (prompts you to accept the
+# Rosetta-Commons academic license):
+#
+#   conda env create -f envs/pyrosetta_rescoring.yaml
+#   conda activate pyrosetta_rescoring
+#   pip install pyrosetta-installer
+#   python -c "import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()"
+#
+# Then verify + run the one-time ligand parameterization step:
+#   python -c "import pyrosetta; pyrosetta.init()"
+#   python rescoring/src/prep_ligand.py
+#
+# No GPU needed for this tier (CPU-only FastRelax + scoring).
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - rdkit>=2023.9
+  - pandas>=2.0
+  - numpy>=1.26,<2.0
+  - matplotlib>=3.8
+  - seaborn>=0.13
+  - biopython>=1.83
+  - pyyaml>=6.0
+  - pip
