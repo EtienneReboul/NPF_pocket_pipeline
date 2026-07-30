@@ -26,7 +26,7 @@ CLASS_ORDER = ["importer", "non_importer"]
 def plot_violin_box(df: pd.DataFrame, column: str, ylabel: str, out_name: str) -> None:
     sub = df.dropna(subset=[column])
 
-    fig, ax = plt.subplots(figsize=(6, 5.5))
+    fig, ax = plt.subplots(figsize=(6, 6))
     sns.violinplot(
         data=sub, x="class", y=column, order=CLASS_ORDER, hue="class", legend=False,
         palette=GROUP_COLOR, inner=None, cut=0, ax=ax, linewidth=1,
@@ -49,9 +49,10 @@ def plot_violin_box(df: pd.DataFrame, column: str, ylabel: str, out_name: str) -
     ax.set_ylabel(ylabel)
     ax.set_title(
         f"{ylabel}\n"
-        f"importer median={a.median():.2f} (n={len(a)})  "
-        f"non_importer median={b.median():.2f} (n={len(b)})  "
-        f"Mann-Whitney p={p:.3g}"
+        f"importer median={a.median():.2f} (n={len(a)})\n"
+        f"non_importer median={b.median():.2f} (n={len(b)})\n"
+        f"Mann-Whitney p={p:.3g}",
+        fontsize=10,
     )
     fig.tight_layout()
     out = config.VINA_FIGURES_DIR / out_name
