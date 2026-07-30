@@ -29,6 +29,8 @@ dependencies:
   - numpy>=1.26,<2.0
   - scipy
   - pyyaml>=6.0
+  - matplotlib>=3.8
+  - seaborn>=0.13
   - pip
   - pip:
       - vina

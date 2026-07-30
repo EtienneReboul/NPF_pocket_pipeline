@@ -113,7 +113,16 @@ def heavy_heavy_bonds_from_pdb(pdb_text: str) -> set[tuple[str, str]]:
     for l in lines:
         if not l.startswith("CONECT"):
             continue
-        fields = [int(x) for x in l[6:].split()]
+        # Fixed-width columns (PDB spec: 5-char serial fields after the
+        # record name), NOT l[6:].split() — with >=5-digit atom serials
+        # (proteins with 10000+ atoms before the ligand, e.g. NPF2.10_Q944G5)
+        # adjacent fields butt up against each other with no whitespace
+        # (e.g. "CONECT10058100591004910073"), so a whitespace split silently
+        # merges them into one bogus number and this function returns zero
+        # bonds instead of raising — always parse by fixed column position.
+        fields = [int(l[i:i + 5]) for i in range(6, len(l.rstrip()), 5) if l[i:i + 5].strip()]
+        if not fields:
+            continue
         a0 = fields[0]
         if a0 not in lig_serials or serial_to_elem[a0] == "H":
             continue

@@ -165,6 +165,57 @@ per complex so you can see this directly rather than have it hidden).
   `fa_rep_raw`/`fa_rep_relaxed` so you can see how much clash relief moved
   things for that specific pose.
 
+## AutoDock Vina scoring (second, independent scoring function)
+
+`src/vina_score.py` / `vina_run_batch.py` / `vina_aggregate.py` score the same
+poses/manifest with AutoDock Vina
+(<https://autodock-vina.readthedocs.io/en/latest/docking_python.html>) —
+`v.score()` on the pose as-is, plus `v.optimize()` (quick local BFGS
+minimization) for a raw-vs-optimized comparison, mirroring the PyRosetta
+pipeline's raw-vs-relaxed pattern. Setup: `envs/vina_rescoring.yaml` (the
+`vina` PyPI package has no prebuilt wheel for macOS arm64 — it builds from
+source against Boost, installed via conda-forge first).
+
+Ligand PDBQT prep reuses `ligand_fix.py`'s bond-order/hydrogen correction
+directly (an RDKit mol in, a PDBQT out, via `meeko.MoleculePreparation` — no
+intermediate file format) — every pose needs it for Vina exactly as much as
+it did for Rosetta. Receptor PDBQT prep uses meeko's `mk_prepare_receptor.py`
+CLI, per complex (each of a protein's ~150 poses is a distinct Boltz-2
+receptor conformation, not just a different ligand placement).
+
+**Correction/anomaly tracking, full batch (4,945/4,950 complexes):**
+
+- Every single ligand (100%, both classes) needed the universal bond-order
+  fix — not a class-differentiated signal, see above.
+- Beyond that: raw-data anomalies (extra/missing ligand atoms or heavy-heavy
+  bonds vs. the clean reference pose) hit **0.44% of importer complexes
+  (8/1799) vs. 1.02% of non_importer complexes (32/3146) — a 2.29x higher
+  rate in non-importers**, though small in absolute terms either way.
+- 5 complexes (1 importer, 4 non_importer) hard-failed receptor prep: meeko's
+  residue-perception flagged an unhandled apparent disulfide bond (e.g.
+  Cys126-Cys134 in one case) it has no padding template for. Not retried —
+  logged in `results/vina/logs/<complex_id>.log`.
+- Caught mid-analysis and fixed: `ligand_fix.heavy_heavy_bonds_from_pdb`
+  originally parsed CONECT records with `.split()`, which silently mangles
+  lines where 5-digit atom serials (proteins with 10,000+ atoms before the
+  ligand, e.g. `NPF2.10_Q944G5`) butt up against each other with no
+  whitespace (PDB CONECT fields are fixed-width, not space-delimited) —
+  now parsed by fixed column position. This only affected the diagnostic
+  anomaly counts above, never the actual ligand correction used for scoring
+  (that always used the one cached reference bond list, from a complex with
+  4-digit serials) — no rescoring was needed once fixed.
+
+**Vina score summary** (kcal/mol-scale; total = full complex binding score,
+not the ligand-residue decomposition the Rosetta pipeline reports):
+non-importers score *more* favorable on average than importers (`total`
+median -9.45 vs -8.81 kcal/mol, Mann-Whitney p=1.4e-127) — the opposite
+direction from what the label might suggest, and not directly comparable to
+the Rosetta per-residue findings (different scoring function, different
+quantity: whole-complex empirical score vs. local two-body decomposition).
+Worth treating as a caveat, not a contradiction — Vina's function is a
+general docking scorer, not tailored to this system, and pocket
+volume/burial differences between classes could confound it.
+
 ## Repo layout
 
 ```text
