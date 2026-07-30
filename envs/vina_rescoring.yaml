@@ -1,0 +1,36 @@
+name: vina_rescoring
+# AutoDock Vina rescoring environment (rescoring/ — scores the SAME poses/
+# manifest as the PyRosetta Tier-3 pipeline, via the Vina Python API:
+# https://autodock-vina.readthedocs.io/en/latest/docking_python.html).
+#
+# The `vina` PyPI package has no prebuilt wheel for macOS arm64 + Python 3.11,
+# so it builds from source and needs Boost headers — install those via
+# conda-forge FIRST, then pip install vina:
+#
+#   conda env create -f envs/vina_rescoring.yaml
+#   conda activate vina_rescoring
+#   pip install vina meeko
+#
+# Ligand/receptor PDBQT preparation uses meeko (mk_prepare_receptor.py CLI +
+# MoleculePreparation Python API for the ligand) — the tool the official Vina
+# docs themselves use, and it consumes an RDKit mol directly so it plugs
+# straight into rescoring/src/ligand_fix.py's bond-order-corrected ligand
+# (see rescoring/README.md for why that correction is needed at all).
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - boost-cpp
+  - boost
+  - swig
+  - rdkit>=2023.9
+  - pandas>=2.0
+  - numpy>=1.26,<2.0
+  - scipy
+  - pyyaml>=6.0
+  - pip
+  - pip:
+      - vina
+      - meeko
+      - gemmi

@@ -22,6 +22,15 @@ python -c "import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()"
 PyRosetta requires an academic license (free) — the installer prompts you to
 accept it. No GPU needed for this tier.
 
+**Note on ligand parameterization:** HANDOFF_rescoring.md's §5 step 1 names
+`molfile_to_params.py` (the classic Rosetta tool) for generating the ligand
+`.params` file. That script ships only with the full Rosetta source/binary
+distribution, not with the PyPI/`pyrosetta-installer` wheel this env uses (it
+also needs a `rosetta_py` helper package that isn't on PyPI). `prep_ligand.py`
+uses `rdkit_to_params` instead (already in `envs/pyrosetta_rescoring.yaml`) —
+a maintained pure RDKit+PyRosetta reimplementation that generates the same
+kind of `.params` file directly from an RDKit mol, in-process.
+
 ## Important: the ligand's hydrogens/bond orders are wrong in every stored pose — fixed locally here
 
 Every `model_minimized.pdb` in `../results/minimized_synth/` has a
@@ -52,6 +61,13 @@ in their raw HETATM records (an artifact of whatever produced that specific
 pose) — so the correct heavy-atom *connectivity* is derived once from a
 clean reference pose and reused (by atom name) for every complex, rather
 than re-derived per-pose.
+
+Atom naming in the corrected ligand: the 25 heavy atoms keep Boltz's own PDB
+atom names (e.g. `C31`, `O27` — identical across every complex already, so no
+renaming needed); the 24 hydrogens RDKit adds back are named `H01`..`H24` in
+a fixed, deterministic order (`ligand_fix.name_new_hydrogens`). `LIG.params`
+is generated with that exact naming, so every complex's corrected ligand
+matches it with no per-complex lookup required.
 
 ## Numbering: LDA "position" (1..35) vs. per-protein residue number
 
@@ -100,9 +116,37 @@ replica-to-replica ensemble variation.
 `data/manifest.csv` has 4,950 complexes (33 hc proteins x 150 holo samples
 each — all 3 conformations x 50 diffusion samples). That's the full ensemble
 per protein, run per explicit choice over the "top-N by ligand_iptm" /
-"single best pose" alternatives — expect this to take a while on a laptop;
-`run_batch.py --limit N` / `--protein` / `--class` let you run a subset
-first.
+"single best pose" alternatives. With the neighborhood-restricted relax (see
+below), one complex takes ~6-10s, so the full batch is tractable in a few
+hours with `--workers` parallelism; `run_batch.py --limit N` / `--protein` /
+`--class` let you run a subset first regardless.
+
+## Clash relief is restricted to a neighborhood around the ligand, not the whole protein
+
+`relief.py` deliberately does NOT run a plain, unrestricted `FastRelax` on
+the whole ~590-residue pose. On the first real complex tested, that blew the
+total score up catastrophically: -665 REU -> **+36,677 REU**. Isolating the
+FastRelax stages found the cause: full-protein *repacking* (rotamer
+reselection) with no restriction was itself unstable on these Boltz-2
+structures (never crystallographically refined) — repacking alone took the
+score from -675 to +1,548; plain minimization alone (no repacking) was fine
+and improved it to -1,645.
+
+The fix — and arguably the more faithful reading of the doc's own "light...
+without drifting... do not over-minimize" instruction — is to restrict both
+the `MoveMap` (bb+chi) and the packer's `TaskFactory` to residues within
+`RELIEF_RADIUS_A` (10 Å, `relief.py`) of the ligand; everything else is held
+completely fixed. Re-tested on the same complex: -668 -> -620 REU, no
+explosion, and ~60x faster (6.5s vs. 392s) since the packer/minimizer only
+ever touches ~20 residues instead of ~590 — which is also why the full
+4,950-complex batch is actually tractable on a laptop.
+
+`fa_rep` typically moves only modestly under this light, local relief (e.g.
+713.2 -> 712.9 on that same complex) — that's expected, not a bug: Boltz-2
+rotamers routinely don't match Rosetta's own rotamer-library ideal geometry
+exactly, and a *light* relax isn't meant to fully erase that (see the sign
+convention section below — `fa_rep_raw`/`fa_rep_relaxed` are both reported
+per complex so you can see this directly rather than have it hidden).
 
 ## Sign convention & REU caveat (read before interpreting anything)
 
@@ -132,9 +176,8 @@ rescoring/
     position_resnr_map.csv     protein, position, resnr
     manifest.csv               complex_id, protein, class, conformation, sample_id, pdb_path
   params/
-    ligand_template.sdf        embedded GA1 conformer used to generate params
-    LIG.params                 Rosetta ligand params (molfile_to_params.py output)
-    atom_naming.json           boltz-name <-> rosetta-name mapping + fixed heavy-heavy bonds
+    LIG.params                 Rosetta ligand params (rdkit_to_params output)
+    atom_naming.json           fixed heavy-heavy bonds + expected heavy-atom name set
   src/
     config.py                  shared paths/constants
     build_position_mapping.py

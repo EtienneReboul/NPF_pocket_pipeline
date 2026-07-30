@@ -24,6 +24,7 @@ def load_atom_naming() -> dict:
         )
     naming = json.loads(path.read_text())
     naming["heavy_bonds_by_name"] = {tuple(p) for p in naming["heavy_bonds_by_name"]}
+    naming["heavy_names"] = set(naming["heavy_names"])
     return naming
 
 
@@ -79,8 +80,7 @@ def prepare_complex_pdb(pdb_path: Path, template: Chem.Mol, naming: dict, out_pa
             max_serial = max(max_serial, int(l[6:11]))
 
     ligand_mol = lf.build_corrected_ligand_mol(
-        text, template, naming["heavy_bonds_by_name"],
-        naming["heavy_name_to_rosetta"], naming["h_rosetta_by_position"],
+        text, template, naming["heavy_bonds_by_name"], naming["heavy_names"],
     )
     ligand_block = Chem.MolToPDBBlock(ligand_mol)
     ligand_lines = _renumber_ligand_block(ligand_block, max_serial + 1)

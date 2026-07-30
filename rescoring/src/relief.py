@@ -5,10 +5,19 @@ Tier-3 clash relief (HANDOFF_rescoring.md §5 step 3): score the raw pose,
 then a light coordinate-constrained FastRelax to relieve clashes without
 drifting from the co-folded/minimized geometry.
 
-Deliberately NOT a full relax — the point is to fix `fa_rep` blowups from
-co-folding/energy-minimization artifacts (see the README's ligand-hydrogen
-finding for one such artifact) while preserving the pose PyRosetta is meant
-to be scoring.
+**Restricted to a neighborhood around the ligand, not the whole protein.**
+This is a deliberate deviation from a literal "FastRelax the whole pose", and
+was found necessary, not just faster: an unrestricted FastRelax on these
+~590-residue Boltz-2 structures (never crystallographically refined) blew the
+total score up catastrophically (-665 REU -> +36,677 REU on the first real
+complex tested) — isolating the FastRelax stages showed it was full-protein
+*repacking* specifically (all residues repacked, no restriction) that was
+unstable (-675 -> +1,548 from packing alone; plain minimization alone, by
+contrast, was fine and improved the score to -1,645). Restricting packing +
+minimization to residues within RELIEF_RADIUS_A of the ligand keeps the score
+change modest (no explosion) and is exactly what the doc itself calls for —
+"light", local clash relief without drifting/over-minimizing far-away parts
+of the structure — while also being far cheaper across ~4,950 complexes.
 """
 from __future__ import annotations
 
@@ -16,6 +25,8 @@ import pyrosetta
 from pyrosetta import rosetta
 
 _INITIALIZED = False
+
+RELIEF_RADIUS_A = 10.0  # neighborhood radius around the ligand allowed to repack/minimize
 
 
 def init_pyrosetta(params_path, seed: int | None = None) -> None:
@@ -46,23 +57,52 @@ def load_pose(pdb_path) -> pyrosetta.Pose:
     return pyrosetta.pose_from_pdb(str(pdb_path))
 
 
-def score_fa_rep(pose: pyrosetta.Pose, sfxn) -> float:
-    sfxn(pose)
-    return pose.energies().total_energies()[rosetta.core.scoring.fa_rep]
+def ligand_residue_index(pose: pyrosetta.Pose, ligand_resname: str = "LIG") -> int:
+    for i in range(1, pose.total_residue() + 1):
+        if pose.residue(i).name3().strip() == ligand_resname:
+            return i
+    raise ValueError(f"No {ligand_resname} residue found in pose.")
 
 
-def light_relax(pose: pyrosetta.Pose, sfxn, cycles: int = 1) -> None:
+def neighborhood_movemap_and_task(pose: pyrosetta.Pose, ligand_resi: int, radius: float = RELIEF_RADIUS_A):
+    """MoveMap (bb+chi) and TaskFactory (repack only), both restricted to
+    residues within `radius` of the ligand — see module docstring for why."""
+    lig_sel = rosetta.core.select.residue_selector.ResidueIndexSelector(str(ligand_resi))
+    nbr_sel = rosetta.core.select.residue_selector.NeighborhoodResidueSelector(lig_sel, radius, True)
+    in_neighborhood = nbr_sel.apply(pose)
+
+    movemap = rosetta.core.kinematics.MoveMap()
+    for i in range(1, pose.total_residue() + 1):
+        if in_neighborhood[i]:
+            movemap.set_bb(i, True)
+            movemap.set_chi(i, True)
+
+    task_factory = rosetta.core.pack.task.TaskFactory()
+    task_factory.push_back(rosetta.core.pack.task.operation.RestrictToRepacking())
+    prevent = rosetta.core.pack.task.operation.PreventRepacking()
+    for i in range(1, pose.total_residue() + 1):
+        if not in_neighborhood[i]:
+            prevent.include_residue(i)
+    task_factory.push_back(prevent)
+
+    return movemap, task_factory
+
+
+def light_relax(pose: pyrosetta.Pose, sfxn, ligand_resi: int, cycles: int = 1) -> None:
     """
-    Coordinate-constrained FastRelax, ramping fa_rep — relieves clashes in
-    place. The coordinate-constraint behavior (constrain to start coords,
-    ramp down) is controlled by the `-relax:*` flags passed once to
-    pyrosetta.init() in init_pyrosetta() above — that's the standard,
+    Coordinate-constrained FastRelax restricted to the ligand's neighborhood
+    (see module docstring). The coordinate-constraint behavior (constrain to
+    start coords, ramp down) is controlled by the `-relax:*` flags passed
+    once to pyrosetta.init() in init_pyrosetta() above — that's the standard,
     documented way to configure this (rather than mover setter methods,
     whose exact names vary across Rosetta versions). fa_rep ramping is
     FastRelax's normal default staged repulsive-ramping schedule, no extra
     flag needed.
     """
+    movemap, task_factory = neighborhood_movemap_and_task(pose, ligand_resi)
     relax = rosetta.protocols.relax.FastRelax(sfxn, cycles)
+    relax.set_movemap(movemap)
+    relax.set_task_factory(task_factory)
     relax.apply(pose)
 
 
@@ -82,11 +122,12 @@ def relieve_clashes(pdb_path, params_path, n_replicas: int = 1, relax_cycles: in
     results = []
     for replica in range(n_replicas):
         pose = load_pose(pdb_path)
+        ligand_resi = ligand_residue_index(pose)
         sfxn(pose)
         fa_rep_raw = pose.energies().total_energies()[rosetta.core.scoring.fa_rep]
         total_raw = pose.energies().total_energies()[rosetta.core.scoring.total_score]
 
-        light_relax(pose, sfxn, cycles=relax_cycles)
+        light_relax(pose, sfxn, ligand_resi, cycles=relax_cycles)
 
         sfxn(pose)
         fa_rep_relaxed = pose.energies().total_energies()[rosetta.core.scoring.fa_rep]

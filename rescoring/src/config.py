@@ -20,6 +20,11 @@ PER_COMPLEX_DIR = RESULTS_DIR / "per_complex"
 LOGS_DIR = RESULTS_DIR / "logs"
 FIGURES_DIR = RESULTS_DIR / "figures"
 
+VINA_RESULTS_DIR = RESULTS_DIR / "vina"
+VINA_PDBQT_DIR = VINA_RESULTS_DIR / "pdbqt"
+VINA_PER_COMPLEX_DIR = VINA_RESULTS_DIR / "per_complex"
+VINA_LOGS_DIR = VINA_RESULTS_DIR / "logs"
+
 MINIMIZED_DIR = PIPELINE_ROOT / "results" / "minimized_synth"
 SEQUENCES_DIR = PIPELINE_ROOT / "data" / "sequences"
 INTERPRO_DIR = PIPELINE_ROOT / "data" / "interpro"
@@ -46,5 +51,6 @@ def load_ligand_smiles() -> str:
     return cfg["boltz"]["ligand_smiles"]
 
 
-for _d in (DATA_DIR, PARAMS_DIR, PER_COMPLEX_DIR, LOGS_DIR, FIGURES_DIR):
+for _d in (DATA_DIR, PARAMS_DIR, PER_COMPLEX_DIR, LOGS_DIR, FIGURES_DIR,
+           VINA_PDBQT_DIR, VINA_PER_COMPLEX_DIR, VINA_LOGS_DIR):
     _d.mkdir(parents=True, exist_ok=True)

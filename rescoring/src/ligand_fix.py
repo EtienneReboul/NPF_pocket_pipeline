@@ -21,9 +21,9 @@ not touch results/minimized_synth or any other analysis (PLIP, ligand_iptm,
 
 Method (validated in prep_ligand.py against the reference complex + a
 handful of others — see its docstring):
-  1. Parse only the ligand's *heavy* atoms (name, element, xyz) from the PDB.
-     Boltz's atom naming for this ligand is the same fixed 25-heavy-atom name
-     set in every complex.
+  1. Parse only the ligand's *heavy* atoms (name, element, xyz) from the PDB,
+     keeping Boltz's own atom names as-is (e.g. "C31", "O27" — the same fixed
+     25-name set in every complex).
   2. Connect them using a **fixed, reference-derived** heavy-heavy bond list
      (by atom name, cached in params/atom_naming.json — see prep_ligand.py),
      NOT each pose's own CONECT records. This matters: spot-checking found
@@ -36,11 +36,19 @@ handful of others — see its docstring):
   3. `AllChem.AssignBondOrdersFromTemplate(template, heavy_mol)` against the
      canonical GA1 template built from the SMILES in config.yaml — this
      fixes bond orders/aromaticity while keeping this complex's own 3D
-     coordinates and atom names.
+     coordinates and Boltz atom names.
   4. `Chem.AddHs(fixed, addCoords=True)` adds the correct 24 hydrogens fresh,
-     placed from the now-correct heavy-atom hybridisation.
-  5. Rename every atom to the name Rosetta's `molfile_to_params.py` assigned
-     to it (see prep_ligand.py) so the PDB matches `params/LIG.params`.
+     placed from the now-correct heavy-atom hybridisation, then names them
+     H01..H24 in RDKit's deterministic AddHs traversal order (see
+     name_new_hydrogens — this order only stays fixed across complexes
+     because step 1-3 always produce the same heavy-atom order/topology).
+
+No renaming step is needed for the heavy atoms: prep_ligand.py generates
+params/LIG.params (via rdkit_to_params, not the classic molfile_to_params.py
+script, which the PyPI/pyrosetta-installer wheel distribution doesn't ship —
+see README.md) directly from a mol built this same way, so its ATOM names
+already match Boltz's own heavy-atom names + our H01..H24 scheme. Every
+complex just needs to reproduce that scheme consistently.
 """
 from __future__ import annotations
 
@@ -54,6 +62,9 @@ import config
 
 LIG_RESNAME = config.LIGAND_RESNAME
 LIG_CHAIN = config.LIGAND_CHAIN
+N_HEAVY = 25
+N_H = 24
+N_TOTAL = N_HEAVY + N_H
 
 
 @dataclass
@@ -130,7 +141,7 @@ def build_heavy_mol(heavy_atoms: list[HeavyAtom], bonds: set[tuple[str, str]]) -
 
     for atom, ha in zip(mol.GetAtoms(), heavy_atoms):
         info = Chem.AtomPDBResidueInfo()
-        info.SetName(f"{ha.name:>4s}")
+        info.SetName(f"{ha.name:<4s}")
         info.SetResidueName(LIG_RESNAME)
         info.SetChainId(LIG_CHAIN)
         info.SetIsHeteroAtom(True)
@@ -151,30 +162,19 @@ def build_template(smiles: str) -> Chem.Mol:
     return template
 
 
-def fix_and_rehydrogenate(heavy_mol: Chem.Mol, template: Chem.Mol) -> Chem.Mol:
-    """AssignBondOrdersFromTemplate (fix bond orders) then AddHs (correct H count/placement)."""
-    fixed = AllChem.AssignBondOrdersFromTemplate(template, heavy_mol)
-    return Chem.AddHs(fixed, addCoords=True)
-
-
-def rename_atoms(mol: Chem.Mol, heavy_name_to_rosetta: dict[str, str], h_rosetta_by_position: list[str]) -> Chem.Mol:
-    """Rename every atom to its Rosetta .params atom name (see prep_ligand.py)."""
-    n_heavy = len(heavy_name_to_rosetta)
-    if mol.GetNumAtoms() != n_heavy + len(h_rosetta_by_position):
-        raise ValueError(
-            f"Atom count mismatch after AddHs: got {mol.GetNumAtoms()}, "
-            f"expected {n_heavy + len(h_rosetta_by_position)}"
-        )
+def name_new_hydrogens(mol: Chem.Mol, n_heavy: int = N_HEAVY) -> Chem.Mol:
+    """
+    Name every atom from index n_heavy onward H01, H02, ... in traversal
+    order. Deterministic given a fixed heavy-atom order + bond topology (both
+    guaranteed identical across complexes — see module docstring) — so this
+    produces the exact same name for "the same" hydrogen in every complex,
+    without needing to look anything up.
+    """
     for i, atom in enumerate(mol.GetAtoms()):
-        info = atom.GetPDBResidueInfo()
         if i < n_heavy:
-            original_name = info.GetName().strip()
-            rosetta_name = heavy_name_to_rosetta[original_name]
-        else:
-            rosetta_name = h_rosetta_by_position[i - n_heavy]
-        if info is None:
-            info = Chem.AtomPDBResidueInfo()
-        info.SetName(f"{rosetta_name:>4s}")
+            continue
+        info = Chem.AtomPDBResidueInfo()
+        info.SetName(f"H{i - n_heavy + 1:02d}".ljust(4))
         info.SetResidueName(LIG_RESNAME)
         info.SetChainId(LIG_CHAIN)
         info.SetIsHeteroAtom(True)
@@ -182,30 +182,31 @@ def rename_atoms(mol: Chem.Mol, heavy_name_to_rosetta: dict[str, str], h_rosetta
     return mol
 
 
+def fix_and_rehydrogenate(heavy_mol: Chem.Mol, template: Chem.Mol) -> Chem.Mol:
+    """AssignBondOrdersFromTemplate (fix bond orders) then AddHs+name (correct H count/placement/names)."""
+    fixed = AllChem.AssignBondOrdersFromTemplate(template, heavy_mol)
+    fixed = Chem.AddHs(fixed, addCoords=True)
+    return name_new_hydrogens(fixed)
+
+
 def build_corrected_ligand_mol(pdb_text: str, template: Chem.Mol,
                                 heavy_bonds_by_name: set[tuple[str, str]],
-                                heavy_name_to_rosetta: dict[str, str],
-                                h_rosetta_by_position: list[str]) -> Chem.Mol:
-    """Full per-complex correction: raw pose PDB text -> corrected, Rosetta-named RDKit mol."""
+                                expected_heavy_names: set[str]) -> Chem.Mol:
+    """Full per-complex correction: raw pose PDB text -> corrected RDKit mol (Boltz heavy names + H01..H24)."""
     heavy_atoms = parse_heavy_atoms(pdb_text)
     found_names = {a.name for a in heavy_atoms}
-    expected_names = set(heavy_name_to_rosetta)
-    if found_names != expected_names:
+    if found_names != expected_heavy_names:
         raise ValueError(
             f"Ligand heavy-atom name set differs from reference. "
-            f"Missing={expected_names - found_names} Extra={found_names - expected_names}"
+            f"Missing={expected_heavy_names - found_names} Extra={found_names - expected_heavy_names}"
         )
     heavy_mol = build_heavy_mol(heavy_atoms, heavy_bonds_by_name)
-    fixed = fix_and_rehydrogenate(heavy_mol, template)
-    return rename_atoms(fixed, heavy_name_to_rosetta, h_rosetta_by_position)
+    return fix_and_rehydrogenate(heavy_mol, template)
 
 
 def corrected_ligand_pdb_block(pdb_text: str, template: Chem.Mol,
                                 heavy_bonds_by_name: set[tuple[str, str]],
-                                heavy_name_to_rosetta: dict[str, str],
-                                h_rosetta_by_position: list[str]) -> str:
+                                expected_heavy_names: set[str]) -> str:
     """Same as build_corrected_ligand_mol, serialized to a PDB block (HETATM + CONECT)."""
-    mol = build_corrected_ligand_mol(
-        pdb_text, template, heavy_bonds_by_name, heavy_name_to_rosetta, h_rosetta_by_position
-    )
+    mol = build_corrected_ligand_mol(pdb_text, template, heavy_bonds_by_name, expected_heavy_names)
     return Chem.MolToPDBBlock(mol)

@@ -5,42 +5,49 @@ src/prep_ligand.py
 One-time (per machine/PyRosetta-install) ligand parameterization.
 
 Requires PyRosetta (see envs/pyrosetta_rescoring.yaml + README.md — this is
-the one script in this project that MUST be run interactively, since
-molfile_to_params.py's exact atom-naming output should be eyeballed once).
+the one script in this project that MUST be run interactively, since it's
+worth eyeballing the params file once).
+
+Uses `rdkit_to_params` (pip install rdkit_to_params) to generate the .params
+file directly from an RDKit mol, in-process. The classic
+`molfile_to_params.py` (what HANDOFF_rescoring.md §5 step 1 originally names)
+ships with the full Rosetta source/binary distribution but NOT with the
+PyPI/pyrosetta-installer wheel this project's env is built on — its
+`rosetta_py` helper package isn't on PyPI either. `rdkit_to_params` is a
+maintained, pure RDKit+PyRosetta reimplementation built for exactly this
+wheel-install scenario, and — usefully — lets us assign atom names directly
+rather than reverse-engineering whatever an external tool picks.
 
 What it does
 ------------
 1. Builds the canonical, correctly-bonded GA1 mol from the SMILES in
    config.yaml (see ligand_fix.py's docstring for *why* this correction is
-   needed at all — every pose's stored ligand has wrong bond orders/H count).
-2. Embeds + MMFF-optimizes a 3D conformer, writes params/ligand_template.sdf.
-3. Runs Rosetta's molfile_to_params.py on it -> params/LIG.params (+ a
-   generated conformer PDB). Rosetta assigns its own atom names in SDF atom
-   order — we don't need to control or predict that scheme, we just read
-   back whatever it picked (parsed from the ATOM lines of LIG.params).
-4. Using ONE reference complex (the first row of manifest.csv), builds:
-     - heavy_name_to_rosetta: {boltz PDB atom name -> rosetta atom name}
-       for the 25 heavy atoms (by substructure match against the template).
-     - h_rosetta_by_position: the 24 rosetta names for the newly-added
-       hydrogens, in the deterministic order Chem.AddHs() produces them
-       (reproducible for every complex — see ligand_fix.py).
-   Both are cached to params/atom_naming.json for relief.py/run_complex.py
-   to reuse without re-deriving per complex.
-5. Validates the whole correction+renaming pipeline against N additional
-   complexes (different proteins, sampled from manifest.csv) — same atom
-   count (49), same heavy-atom name SET, and that the corrected ligand
-   round-trips through Chem.SanitizeMol cleanly. Fails loudly on any
+   needed at all — every pose's stored ligand has wrong bond orders/H count),
+   using ONE reference complex (the first row of manifest.csv) for the
+   heavy-atom 3D coordinates and Boltz's own heavy-atom names.
+2. Computes Gasteiger partial charges (rdkit_to_params' default) and
+   generates params/LIG.params via `rdkit_to_params.Params.from_mol()`,
+   explicitly naming atoms: Boltz's own names for the 25 heavy atoms, H01..H24
+   for the added hydrogens (ligand_fix.name_new_hydrogens — deterministic, so
+   every complex reproduces the same names without any lookup).
+3. Caches the reference-derived heavy-heavy bond list + heavy atom name set
+   to params/atom_naming.json (used by every complex at run time instead of
+   trusting that complex's own, sometimes-anomalous, CONECT records — see
+   ligand_fix.py).
+4. Validates the whole correction pipeline against N additional complexes
+   (different proteins, sampled from manifest.csv): same atom count (49),
+   same heavy-atom name SET, correct formula, AND — since PyRosetta is
+   available here — actually loads each corrected ligand into a PyRosetta
+   pose with `-extra_res_fa params/LIG.params` and scores it, to catch any
+   params/naming mismatch before the full batch run. Fails loudly on any
    mismatch (see the doc's "fail loudly" instruction for PyRosetta-adjacent
    tooling).
 
 Usage:
-    python src/prep_ligand.py [--n-validate 5]
+    python src/prep_ligand.py [--n-validate 20]
 """
 import argparse
-import json
-import subprocess
 import sys
-from pathlib import Path
 
 import pandas as pd
 from rdkit import Chem
@@ -48,134 +55,74 @@ from rdkit.Chem import AllChem
 
 import config
 import ligand_fix as lf
-
-N_HEAVY = 25
-N_H = 24
-N_TOTAL = N_HEAVY + N_H
+import pose_prep as pp
 
 
-def locate_molfile_to_params() -> Path:
-    """Find molfile_to_params.py shipped inside the installed pyrosetta package."""
-    try:
-        import pyrosetta  # noqa: F401
-    except ImportError:
-        sys.exit(
-            "PyRosetta is not installed in this environment. "
-            "See ../README.md for install instructions (academic license required)."
-        )
-    import pyrosetta as pr
-
-    pkg_dir = Path(pr.__file__).resolve().parent
-    hits = list(pkg_dir.rglob("molfile_to_params.py"))
-    if not hits:
-        # Fall back: search the whole site-packages tree (some distributions
-        # ship the database as a sibling package, not under pyrosetta/).
-        site_packages = pkg_dir.parent
-        hits = list(site_packages.rglob("molfile_to_params.py"))
-    if not hits:
-        sys.exit(
-            "Could not find molfile_to_params.py under the installed pyrosetta "
-            f"package ({pkg_dir}). It ships in Rosetta's database/scripts — "
-            "check your PyRosetta install includes the database."
-        )
-    return hits[0]
-
-
-def build_and_embed_template(smiles: str) -> Chem.Mol:
+def build_and_embed_reference(reference_pdb) -> tuple[Chem.Mol, Chem.Mol, set[tuple[str, str]]]:
+    """Returns (template_noH, corrected_reference_mol, heavy_bonds_by_name)."""
+    smiles = config.load_ligand_smiles()
     template = lf.build_template(smiles)
-    template_h = Chem.AddHs(template)
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 0xF00D
-    if AllChem.EmbedMolecule(template_h, params) != 0:
-        sys.exit("RDKit conformer embedding failed for the GA1 template.")
-    AllChem.MMFFOptimizeMolecule(template_h, maxIters=2000)
-    return template_h
 
-
-def run_molfile_to_params(script: Path, sdf_path: Path, out_prefix: Path) -> list[str]:
-    """Run molfile_to_params.py, return the ATOM names in input-atom order."""
-    out_prefix.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        sys.executable, str(script),
-        "-n", "LIG",
-        "-p", str(out_prefix),
-        "--clobber",
-        str(sdf_path),
-    ]
-    print(f"[prep_ligand] running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=out_prefix.parent, capture_output=True, text=True)
-    print(result.stdout)
-    if result.returncode != 0:
-        print(result.stderr, file=sys.stderr)
-        sys.exit(f"molfile_to_params.py failed (exit {result.returncode})")
-
-    params_path = out_prefix.with_suffix(".params")
-    if not params_path.exists():
-        sys.exit(f"Expected {params_path} was not created.")
-
-    names = []
-    for line in params_path.read_text().splitlines():
-        if line.startswith("ATOM "):
-            names.append(line.split()[1])
-    if len(names) != N_TOTAL:
-        sys.exit(f"Expected {N_TOTAL} ATOM lines in {params_path}, found {len(names)}.")
-    return names
-
-
-def derive_naming(template_h: Chem.Mol, template_noH: Chem.Mol, rosetta_names: list[str],
-                   reference_pdb: Path, bonds: set[tuple[str, str]]) -> tuple[dict[str, str], list[str]]:
     text = reference_pdb.read_text()
+    heavy_bonds_by_name = lf.heavy_heavy_bonds_from_pdb(text)
     heavy_atoms = lf.parse_heavy_atoms(text)
-    if len(heavy_atoms) != N_HEAVY:
-        sys.exit(f"{reference_pdb}: expected {N_HEAVY} heavy ligand atoms, found {len(heavy_atoms)}")
+    if len(heavy_atoms) != lf.N_HEAVY:
+        sys.exit(f"{reference_pdb}: expected {lf.N_HEAVY} heavy ligand atoms, found {len(heavy_atoms)}")
 
-    heavy_mol = lf.build_heavy_mol(heavy_atoms, bonds)
-    fixed = lf.fix_and_rehydrogenate(heavy_mol, template_noH)
-    if fixed.GetNumAtoms() != N_TOTAL:
-        sys.exit(f"{reference_pdb}: corrected ligand has {fixed.GetNumAtoms()} atoms, expected {N_TOTAL}")
-
-    match = fixed.GetSubstructMatch(template_h)
-    if len(match) != N_TOTAL:
-        sys.exit(
-            f"{reference_pdb}: substructure match against the full (with-H) template "
-            f"found only {len(match)}/{N_TOTAL} atoms."
-        )
-
-    pos_to_rosetta = {match[t]: rosetta_names[t] for t in range(N_TOTAL)}
-
-    heavy_name_to_rosetta = {}
-    for i in range(N_HEAVY):
-        info = fixed.GetAtomWithIdx(i).GetPDBResidueInfo()
-        heavy_name_to_rosetta[info.GetName().strip()] = pos_to_rosetta[i]
-    h_rosetta_by_position = [pos_to_rosetta[i] for i in range(N_HEAVY, N_TOTAL)]
-
-    return heavy_name_to_rosetta, h_rosetta_by_position
+    heavy_mol = lf.build_heavy_mol(heavy_atoms, heavy_bonds_by_name)
+    fixed = lf.fix_and_rehydrogenate(heavy_mol, template)
+    if fixed.GetNumAtoms() != lf.N_TOTAL:
+        sys.exit(f"{reference_pdb}: corrected ligand has {fixed.GetNumAtoms()} atoms, expected {lf.N_TOTAL}")
+    return template, fixed, heavy_bonds_by_name
 
 
-EXPECTED_FORMULA = None  # set in main() from the template, so a real formula change is caught
+def generate_params(mol: Chem.Mol, out_path) -> None:
+    import pyrosetta
+    pyrosetta.init("-mute all")
+    from rdkit_to_params import Params
+
+    mol = Chem.Mol(mol)
+    AllChem.ComputeGasteigerCharges(mol)
+    atomnames = {i: a.GetPDBResidueInfo().GetName() for i, a in enumerate(mol.GetAtoms())}
+    p = Params.from_mol(mol, name=config.LIGAND_RESNAME, atomnames=atomnames)
+    p.dump(str(out_path))
+    print(f"[prep_ligand] wrote {out_path}")
 
 
 def validate(template_noH: Chem.Mol, heavy_bonds_by_name: set[tuple[str, str]],
-             heavy_name_to_rosetta: dict[str, str],
-             h_rosetta_by_position: list[str], pdb_paths: list[Path]) -> None:
+             expected_heavy_names: set[str], expected_formula: str, pdb_paths: list) -> None:
+    import pyrosetta
+    pyrosetta.init(f"-extra_res_fa {config.PARAMS_DIR / 'LIG.params'} -mute all")
+
     for pdb_path in pdb_paths:
         text = pdb_path.read_text()
         try:
-            mol = lf.build_corrected_ligand_mol(
-                text, template_noH, heavy_bonds_by_name, heavy_name_to_rosetta, h_rosetta_by_position
-            )
+            mol = lf.build_corrected_ligand_mol(text, template_noH, heavy_bonds_by_name, expected_heavy_names)
         except (ValueError, Chem.AtomValenceException) as e:
             sys.exit(f"[prep_ligand] VALIDATION FAILED {pdb_path}: {e}")
-        if mol.GetNumAtoms() != N_TOTAL:
-            sys.exit(f"[prep_ligand] VALIDATION FAILED {pdb_path}: {mol.GetNumAtoms()} atoms, expected {N_TOTAL}")
+        if mol.GetNumAtoms() != lf.N_TOTAL:
+            sys.exit(f"[prep_ligand] VALIDATION FAILED {pdb_path}: {mol.GetNumAtoms()} atoms, expected {lf.N_TOTAL}")
         formula = Chem.rdMolDescriptors.CalcMolFormula(mol)
-        if EXPECTED_FORMULA is not None and formula != EXPECTED_FORMULA:
-            sys.exit(f"[prep_ligand] VALIDATION FAILED {pdb_path}: formula {formula} != {EXPECTED_FORMULA}")
-        print(f"[prep_ligand]   validated {pdb_path.parent.name}: OK ({formula})")
+        if formula != expected_formula:
+            sys.exit(f"[prep_ligand] VALIDATION FAILED {pdb_path}: formula {formula} != {expected_formula}")
+
+        # Real end-to-end check: stage the full complex and actually load+score it in PyRosetta.
+        naming = {"heavy_bonds_by_name": heavy_bonds_by_name, "heavy_names": expected_heavy_names}
+        staged = config.RESULTS_DIR / "staged_poses" / f"_prep_validate_{pdb_path.parent.name}.pdb"
+        pp.prepare_complex_pdb(pdb_path, template_noH, naming, staged)
+        try:
+            pose = pyrosetta.pose_from_pdb(str(staged))
+            sfxn = pyrosetta.get_score_function()
+            score = sfxn(pose)
+        except Exception as e:
+            sys.exit(f"[prep_ligand] VALIDATION FAILED {pdb_path}: PyRosetta could not load/score it: {e}")
+        finally:
+            staged.unlink(missing_ok=True)
+        print(f"[prep_ligand]   validated {pdb_path.parent.name}: OK "
+              f"({formula}, total_score={score:.1f})")
 
 
 def main():
-    global EXPECTED_FORMULA
     ap = argparse.ArgumentParser()
     ap.add_argument("--n-validate", type=int, default=20,
                     help="number of additional (non-reference) complexes to spot-check")
@@ -185,53 +132,36 @@ def main():
         sys.exit("data/manifest.csv not found — run make_labels.py + make_manifest.py first.")
     manifest = pd.read_csv(config.MANIFEST_CSV)
 
-    smiles = config.load_ligand_smiles()
-    print(f"[prep_ligand] GA1 SMILES: {smiles}")
-    template_h = build_and_embed_template(smiles)
-    template_noH = Chem.RemoveHs(template_h)
-    EXPECTED_FORMULA = Chem.rdMolDescriptors.CalcMolFormula(template_h)
-    print(f"[prep_ligand] expected formula: {EXPECTED_FORMULA}")
-
-    sdf_path = config.PARAMS_DIR / "ligand_template.sdf"
-    Chem.MolToMolFile(template_h, str(sdf_path))
-    print(f"[prep_ligand] wrote {sdf_path}")
-
-    script = locate_molfile_to_params()
-    print(f"[prep_ligand] using {script}")
-    rosetta_names = run_molfile_to_params(script, sdf_path, config.PARAMS_DIR / "LIG")
-    print(f"[prep_ligand] rosetta atom names ({len(rosetta_names)}): {rosetta_names}")
-
     reference_row = manifest.iloc[0]
     reference_pdb = config.PIPELINE_ROOT / reference_row["pdb_path"]
     print(f"[prep_ligand] reference complex: {reference_row['complex_id']} ({reference_pdb})")
 
-    heavy_bonds_by_name = lf.heavy_heavy_bonds_from_pdb(reference_pdb.read_text())
-    print(f"[prep_ligand] heavy_bonds_by_name ({len(heavy_bonds_by_name)} bonds, fixed for all complexes): "
-          f"{sorted(heavy_bonds_by_name)}")
+    template_noH, reference_mol, heavy_bonds_by_name = build_and_embed_reference(reference_pdb)
+    expected_formula = Chem.rdMolDescriptors.CalcMolFormula(reference_mol)
+    expected_heavy_names = {a.GetPDBResidueInfo().GetName().strip() for a in list(reference_mol.GetAtoms())[:lf.N_HEAVY]}
+    print(f"[prep_ligand] expected formula: {expected_formula}")
+    print(f"[prep_ligand] heavy_bonds_by_name ({len(heavy_bonds_by_name)} bonds, fixed for all complexes)")
 
-    heavy_name_to_rosetta, h_rosetta_by_position = derive_naming(
-        template_h, template_noH, rosetta_names, reference_pdb, heavy_bonds_by_name
-    )
-    print(f"[prep_ligand] heavy_name_to_rosetta: {heavy_name_to_rosetta}")
-    print(f"[prep_ligand] h_rosetta_by_position: {h_rosetta_by_position}")
+    generate_params(reference_mol, config.PARAMS_DIR / "LIG.params")
+
+    naming = {
+        "smiles": config.load_ligand_smiles(),
+        "reference_complex_id": reference_row["complex_id"],
+        "heavy_bonds_by_name": sorted(heavy_bonds_by_name),
+        "heavy_names": sorted(expected_heavy_names),
+    }
+    out_path = config.PARAMS_DIR / "atom_naming.json"
+    import json
+    out_path.write_text(json.dumps(naming, indent=2))
+    print(f"[prep_ligand] wrote {out_path}")
 
     other_rows = manifest[manifest["complex_id"] != reference_row["complex_id"]]
     sample_rows = other_rows.sample(n=min(args.n_validate, len(other_rows)), random_state=0)
     sample_paths = [config.PIPELINE_ROOT / p for p in sample_rows["pdb_path"]]
     print(f"[prep_ligand] validating against {len(sample_paths)} random complexes "
           f"({list(sample_rows['complex_id'])})...")
-    validate(template_noH, heavy_bonds_by_name, heavy_name_to_rosetta, h_rosetta_by_position, sample_paths)
+    validate(template_noH, heavy_bonds_by_name, expected_heavy_names, expected_formula, sample_paths)
 
-    naming = {
-        "smiles": smiles,
-        "reference_complex_id": reference_row["complex_id"],
-        "heavy_bonds_by_name": sorted(heavy_bonds_by_name),
-        "heavy_name_to_rosetta": heavy_name_to_rosetta,
-        "h_rosetta_by_position": h_rosetta_by_position,
-    }
-    out_path = config.PARAMS_DIR / "atom_naming.json"
-    out_path.write_text(json.dumps(naming, indent=2))
-    print(f"[prep_ligand] wrote {out_path}")
     print("[prep_ligand] done — params/LIG.params is ready for -extra_res_fa.")
 
 

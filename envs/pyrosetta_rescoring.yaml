@@ -11,6 +11,13 @@ name: pyrosetta_rescoring
 #   pip install pyrosetta-installer
 #   python -c "import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()"
 #
+# rdkit_to_params (pip, below) generates the ligand .params file directly
+# from an RDKit mol. This is needed because the PyPI/pyrosetta-installer
+# wheel does NOT bundle the classic molfile_to_params.py script (that ships
+# only with the full Rosetta source/binary distribution, along with its
+# required rosetta_py helper package, which isn't on PyPI) — see
+# rescoring/README.md and prep_ligand.py's docstring.
+#
 # Then verify + run the one-time ligand parameterization step:
 #   python -c "import pyrosetta; pyrosetta.init()"
 #   python rescoring/src/prep_ligand.py
@@ -29,3 +36,5 @@ dependencies:
   - biopython>=1.83
   - pyyaml>=6.0
   - pip
+  - pip:
+      - rdkit_to_params
